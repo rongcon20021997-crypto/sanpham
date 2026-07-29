@@ -56,7 +56,7 @@ export function DashboardPage() {
         subtitle="Thống kê nhanh về hệ thống quản lý áo thun in"
       />
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6 sm:mb-8">
         <StatCard label="Loại phôi" value={stats.blankTypes} icon={Layers} color="bg-brand-500" />
         <StatCard label="Phôi" value={stats.blanks} icon={Package} color="bg-cyan-500" />
         <StatCard label="Hình in" value={stats.designs} icon={Image} color="bg-violet-500" />

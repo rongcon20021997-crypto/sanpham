@@ -36,7 +36,7 @@ export function Modal({ open, onClose, title, children, size = "md" }: ModalProp
   }[size || "md"];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-6 overflow-y-auto">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 overflow-y-auto">
       <div
         className={`absolute inset-0 bg-slate-950/75 backdrop-blur-md transition-opacity duration-200 ${
           show ? "opacity-100" : "opacity-0"
@@ -44,7 +44,7 @@ export function Modal({ open, onClose, title, children, size = "md" }: ModalProp
         onClick={onClose}
       />
       <div
-        className={`relative w-full ${sizeClass} my-auto bg-slate-900 rounded-2xl shadow-2xl border border-slate-700/50 transition-all duration-200 ${
+        className={`relative w-full ${sizeClass} max-w-[95vw] sm:max-w-full my-auto bg-slate-900 rounded-2xl shadow-2xl border border-slate-700/50 transition-all duration-200 ${
           show ? "scale-100 opacity-100" : "scale-95 opacity-0"
         }`}
       >

@@ -95,79 +95,138 @@ export function UsersPage() {
         ) : items.length === 0 ? (
           <EmptyState message="Chưa có nhân viên nào." />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-slate-700/50 bg-slate-800/30">
-                  <th className="text-left text-xs font-semibold text-slate-400 uppercase px-5 py-3">Nhân viên</th>
-                  <th className="text-left text-xs font-semibold text-slate-400 uppercase px-5 py-3 hidden md:table-cell">Liên hệ</th>
-                  <th className="text-center text-xs font-semibold text-slate-400 uppercase px-5 py-3">Vai trò</th>
-                  <th className="text-center text-xs font-semibold text-slate-400 uppercase px-5 py-3">Trạng thái</th>
-                  <th className="text-left text-xs font-semibold text-slate-400 uppercase px-5 py-3 hidden lg:table-cell">Tạo lúc</th>
-                  <th className="text-right text-xs font-semibold text-slate-400 uppercase px-5 py-3">Thao tác</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((item) => (
-                  <tr key={item.id} className="border-b border-slate-800 hover:bg-slate-800/30 transition-colors">
-                    <td className="px-5 py-3.5">
-                      <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 rounded-full bg-gradient-to-br from-slate-600 to-slate-700 flex items-center justify-center">
-                          <UserCircle size={20} className="text-slate-300" />
-                        </div>
-                        <div>
-                          <p className="text-sm font-medium text-slate-200">{item.full_name || "(chưa đặt tên)"}</p>
-                          <p className="text-xs text-slate-500">@{emailToUsername(item.email)}</p>
-                        </div>
+          <>
+            {/* Mobile Card View (< sm) */}
+            <div className="sm:hidden divide-y divide-slate-800">
+              {items.map((item) => (
+                <div key={item.id} className="p-4 space-y-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-full bg-gradient-to-br from-slate-600 to-slate-700 flex items-center justify-center shrink-0">
+                        <UserCircle size={24} className="text-slate-300" />
                       </div>
-                    </td>
-                    <td className="px-5 py-3.5 hidden md:table-cell">
-                      {item.phone ? (
-                        <span className="flex items-center gap-1.5 text-sm text-slate-400"><Phone size={14} /> {item.phone}</span>
-                      ) : <span className="text-sm text-slate-600">—</span>}
-                    </td>
-                    <td className="px-5 py-3.5 text-center">
-                      {item.role === "admin" ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-brand-500/10 text-brand-400">
-                          <ShieldCheck size={12} /> Quản trị
-                        </span>
-                      ) : (
-                        <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-700/50 text-slate-400">Nhân viên</span>
-                      )}
-                    </td>
-                    <td className="px-5 py-3.5 text-center">
-                      <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${
-                        item.status === "active" ? "bg-emerald-500/10 text-emerald-400" : "bg-rose-500/10 text-rose-400"
-                      }`}>
-                        {item.status === "active" ? "Hoạt động" : "Đã khóa"}
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-slate-200 truncate">{item.full_name || "(chưa đặt tên)"}</p>
+                        <p className="text-xs text-slate-400">@{emailToUsername(item.email)}</p>
+                      </div>
+                    </div>
+                    {item.role === "admin" ? (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-brand-500/10 text-brand-400 shrink-0">
+                        <ShieldCheck size={12} /> Quản trị
                       </span>
-                    </td>
-                    <td className="px-5 py-3.5 hidden lg:table-cell">
-                      <span className="text-sm text-slate-500">{formatDate(item.created_at)}</span>
-                    </td>
-                    <td className="px-5 py-3.5">
-                      <div className="flex items-center justify-end gap-1">
-                        <button onClick={() => toggleStatus(item)}
-                          className={`p-2 rounded-lg transition-colors ${
-                            item.status === "active" ? "text-slate-500 hover:bg-rose-500/10 hover:text-rose-400" : "text-slate-500 hover:bg-emerald-500/10 hover:text-emerald-400"
-                          }`}
-                          title={item.status === "active" ? "Khóa" : "Mở khóa"}>
-                          {item.status === "active" ? <Ban size={16} /> : <CheckCircle2 size={16} />}
-                        </button>
-                        <button onClick={() => openEdit(item)} className="p-2 rounded-lg text-slate-500 hover:bg-amber-500/10 hover:text-amber-400 transition-colors">
-                          <Pencil size={16} />
-                        </button>
-                        <button onClick={() => handleDelete(item)} disabled={item.id === profile?.id}
-                          className="p-2 rounded-lg text-slate-500 hover:bg-rose-500/10 hover:text-rose-400 transition-colors disabled:opacity-30 disabled:cursor-not-allowed">
-                          <Trash2 size={16} />
-                        </button>
-                      </div>
-                    </td>
+                    ) : (
+                      <span className="px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-slate-700/50 text-slate-400 shrink-0">
+                        Nhân viên
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center justify-between text-xs text-slate-400 pt-1">
+                    <span className="flex items-center gap-1">
+                      <Phone size={13} className="text-slate-500" />
+                      {item.phone || "Chưa có SĐT"}
+                    </span>
+                    <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-medium ${
+                      item.status === "active" ? "bg-emerald-500/10 text-emerald-400" : "bg-rose-500/10 text-rose-400"
+                    }`}>
+                      {item.status === "active" ? "Hoạt động" : "Đã khóa"}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800/60">
+                    <button onClick={() => toggleStatus(item)}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium transition-colors ${
+                        item.status === "active" ? "bg-rose-500/10 text-rose-400 hover:bg-rose-500/20" : "bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20"
+                      }`}>
+                      {item.status === "active" ? <><Ban size={14} /> Khóa</> : <><CheckCircle2 size={14} /> Mở khóa</>}
+                    </button>
+                    <button onClick={() => openEdit(item)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 text-xs font-medium transition-colors">
+                      <Pencil size={14} /> Sửa
+                    </button>
+                    <button onClick={() => handleDelete(item)} disabled={item.id === profile?.id}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 text-xs font-medium transition-colors disabled:opacity-30 disabled:cursor-not-allowed">
+                      <Trash2 size={14} /> Xóa
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Desktop Table View (>= sm) */}
+            <div className="hidden sm:block overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-slate-700/50 bg-slate-800/30">
+                    <th className="text-left text-xs font-semibold text-slate-400 uppercase px-5 py-3">Nhân viên</th>
+                    <th className="text-left text-xs font-semibold text-slate-400 uppercase px-5 py-3 hidden md:table-cell">Liên hệ</th>
+                    <th className="text-center text-xs font-semibold text-slate-400 uppercase px-5 py-3">Vai trò</th>
+                    <th className="text-center text-xs font-semibold text-slate-400 uppercase px-5 py-3">Trạng thái</th>
+                    <th className="text-left text-xs font-semibold text-slate-400 uppercase px-5 py-3 hidden lg:table-cell">Tạo lúc</th>
+                    <th className="text-right text-xs font-semibold text-slate-400 uppercase px-5 py-3">Thao tác</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {items.map((item) => (
+                    <tr key={item.id} className="border-b border-slate-800 hover:bg-slate-800/30 transition-colors">
+                      <td className="px-5 py-3.5">
+                        <div className="flex items-center gap-3">
+                          <div className="w-9 h-9 rounded-full bg-gradient-to-br from-slate-600 to-slate-700 flex items-center justify-center">
+                            <UserCircle size={20} className="text-slate-300" />
+                          </div>
+                          <div>
+                            <p className="text-sm font-medium text-slate-200">{item.full_name || "(chưa đặt tên)"}</p>
+                            <p className="text-xs text-slate-500">@{emailToUsername(item.email)}</p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-5 py-3.5 hidden md:table-cell">
+                        {item.phone ? (
+                          <span className="flex items-center gap-1.5 text-sm text-slate-400"><Phone size={14} /> {item.phone}</span>
+                        ) : <span className="text-sm text-slate-600">—</span>}
+                      </td>
+                      <td className="px-5 py-3.5 text-center">
+                        {item.role === "admin" ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-brand-500/10 text-brand-400">
+                            <ShieldCheck size={12} /> Quản trị
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-700/50 text-slate-400">Nhân viên</span>
+                        )}
+                      </td>
+                      <td className="px-5 py-3.5 text-center">
+                        <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${
+                          item.status === "active" ? "bg-emerald-500/10 text-emerald-400" : "bg-rose-500/10 text-rose-400"
+                        }`}>
+                          {item.status === "active" ? "Hoạt động" : "Đã khóa"}
+                        </span>
+                      </td>
+                      <td className="px-5 py-3.5 hidden lg:table-cell">
+                        <span className="text-sm text-slate-500">{formatDate(item.created_at)}</span>
+                      </td>
+                      <td className="px-5 py-3.5">
+                        <div className="flex items-center justify-end gap-1">
+                          <button onClick={() => toggleStatus(item)}
+                            className={`p-2 rounded-lg transition-colors ${
+                              item.status === "active" ? "text-slate-500 hover:bg-rose-500/10 hover:text-rose-400" : "text-slate-500 hover:bg-emerald-500/10 hover:text-emerald-400"
+                            }`}
+                            title={item.status === "active" ? "Khóa" : "Mở khóa"}>
+                            {item.status === "active" ? <Ban size={16} /> : <CheckCircle2 size={16} />}
+                          </button>
+                          <button onClick={() => openEdit(item)} className="p-2 rounded-lg text-slate-500 hover:bg-amber-500/10 hover:text-amber-400 transition-colors">
+                            <Pencil size={16} />
+                          </button>
+                          <button onClick={() => handleDelete(item)} disabled={item.id === profile?.id}
+                            className="p-2 rounded-lg text-slate-500 hover:bg-rose-500/10 hover:text-rose-400 transition-colors disabled:opacity-30 disabled:cursor-not-allowed">
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </div>
 

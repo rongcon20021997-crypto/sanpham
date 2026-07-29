@@ -138,12 +138,13 @@ export function Layout({ current, onNavigate, children }: LayoutProps) {
           >
             <Menu size={20} />
           </button>
-          <span className="font-semibold text-slate-200">
+          <img src="/logo.png" alt="Logo" className="w-7 h-7 object-contain" />
+          <span className="font-semibold text-slate-200 text-sm sm:text-base">
             {navItems.find((i) => i.key === current)?.label}
           </span>
         </header>
 
-        <main className="flex-1 p-4 lg:p-8">{children}</main>
+        <main className="flex-1 p-3 sm:p-5 lg:p-8">{children}</main>
       </div>
     </div>
   );
