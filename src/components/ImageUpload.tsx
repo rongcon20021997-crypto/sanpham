@@ -21,14 +21,28 @@ export function ImageUpload({
 }: ImageUploadProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
     setUploading(true);
-    const url = await uploadFile(file, folder);
-    setUploading(false);
-    if (url) onChange(url);
+    setError(null);
+    try {
+      const url = await uploadFile(file, folder);
+      if (url) {
+        onChange(url);
+      } else {
+        setError("Tải ảnh thất bại. Vui lòng thử lại.");
+      }
+    } catch (err) {
+      setError((err as Error).message || "Lỗi tải ảnh");
+    } finally {
+      setUploading(false);
+      if (e.target) {
+        e.target.value = "";
+      }
+    }
   }
 
   return (
@@ -82,6 +96,7 @@ export function ImageUpload({
           className="hidden"
         />
       </div>
+      {error && <p className="text-xs text-rose-400 mt-1">{error}</p>}
     </div>
   );
 }

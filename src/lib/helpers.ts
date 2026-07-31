@@ -2,25 +2,45 @@ import { createClient } from "@supabase/supabase-js";
 import { supabase } from "./supabase";
 import type { Profile } from "./types";
 
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = (err) => reject(err);
+    reader.readAsDataURL(file);
+  });
+}
+
 export async function uploadFile(
   file: File,
   folder: string
 ): Promise<string | null> {
-  const ext = file.name.split(".").pop() || "png";
-  const fileName = `${folder}/${Date.now()}-${Math.random()
-    .toString(36)
-    .slice(2)}.${ext}`;
-  const { error } = await supabase.storage
-    .from("tshirt-assets")
-    .upload(fileName, file, { cacheControl: "3600", upsert: false });
-  if (error) {
-    console.error("Upload error:", error.message);
-    return null;
+  try {
+    const ext = file.name.split(".").pop() || "png";
+    const fileName = `${folder}/${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2)}.${ext}`;
+    const { error } = await supabase.storage
+      .from("tshirt-assets")
+      .upload(fileName, file, { cacheControl: "3600", upsert: false });
+
+    if (!error) {
+      const { data } = supabase.storage
+        .from("tshirt-assets")
+        .getPublicUrl(fileName);
+      if (data?.publicUrl) return data.publicUrl;
+    }
+
+    console.warn("Supabase Storage error, falling back to Data URL:", error?.message);
+    return await fileToDataUrl(file);
+  } catch (err) {
+    console.error("Upload error, using fallback Data URL:", err);
+    try {
+      return await fileToDataUrl(file);
+    } catch {
+      return null;
+    }
   }
-  const { data } = supabase.storage
-    .from("tshirt-assets")
-    .getPublicUrl(fileName);
-  return data.publicUrl;
 }
 
 export function formatCurrency(n: number): string {
