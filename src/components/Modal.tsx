@@ -36,28 +36,35 @@ export function Modal({ open, onClose, title, children, size = "md" }: ModalProp
   }[size || "md"];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 overflow-y-auto">
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-2 sm:p-6">
+      {/* Backdrop */}
       <div
-        className={`absolute inset-0 bg-slate-950/75 backdrop-blur-md transition-opacity duration-200 ${
+        className={`absolute inset-0 bg-slate-950/80 backdrop-blur-md transition-opacity duration-200 ${
           show ? "opacity-100" : "opacity-0"
         }`}
         onClick={onClose}
       />
+      
+      {/* Modal Dialog */}
       <div
-        className={`relative w-full ${sizeClass} max-w-[95vw] sm:max-w-full my-auto bg-slate-900 rounded-2xl shadow-2xl border border-slate-700/50 transition-all duration-200 ${
-          show ? "scale-100 opacity-100" : "scale-95 opacity-0"
+        className={`relative w-full ${sizeClass} max-w-full my-0 sm:my-auto bg-slate-900 rounded-t-2xl sm:rounded-2xl shadow-2xl border border-slate-700/60 flex flex-col max-h-[92vh] sm:max-h-[90vh] overflow-hidden transition-all duration-200 ${
+          show ? "translate-y-0 scale-100 opacity-100" : "translate-y-4 sm:translate-y-0 scale-95 opacity-0"
         }`}
       >
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-700/50">
-          <h3 className="text-lg font-semibold text-slate-100">{title}</h3>
+        {/* Header */}
+        <div className="flex items-center justify-between px-4 sm:px-6 py-3.5 sm:py-4 border-b border-slate-700/60 shrink-0 bg-slate-900/90">
+          <h3 className="text-base sm:text-lg font-semibold text-slate-100 truncate pr-2">{title}</h3>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-700/50 hover:text-slate-200 transition-colors"
+            className="p-2 rounded-xl text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition-colors shrink-0"
+            title="Đóng"
           >
             <X size={20} />
           </button>
         </div>
-        <div className="px-6 py-5 max-h-[85vh] overflow-y-auto">{children}</div>
+
+        {/* Content Body */}
+        <div className="px-4 sm:px-6 py-4 sm:py-5 overflow-y-auto flex-1">{children}</div>
       </div>
     </div>
   );

@@ -73,6 +73,10 @@ export interface Product {
   id: string;
   code: string;
   name: string;
+  master_name?: string | null;
+  master_code?: string | null;
+  images?: string[] | null;
+  video_url?: string | null;
   blank_id: string;
   print_design_id: string;
   preview_url: string | null;
