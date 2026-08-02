@@ -9,6 +9,8 @@ interface ImageUploadProps {
   label?: string;
   accept?: string;
   heightClass?: string;
+  customCode?: string;
+  oldUrl?: string | null;
 }
 
 export function ImageUpload({
@@ -18,6 +20,8 @@ export function ImageUpload({
   label = "Ảnh",
   accept = "image/*",
   heightClass = "h-36 sm:h-40",
+  customCode,
+  oldUrl,
 }: ImageUploadProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
@@ -29,7 +33,7 @@ export function ImageUpload({
     setUploading(true);
     setError(null);
     try {
-      const url = await uploadFile(file, folder);
+      const url = await uploadFile(file, folder, customCode, oldUrl || value);
       if (url) {
         onChange(url);
       } else {

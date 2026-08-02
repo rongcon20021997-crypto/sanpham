@@ -5,8 +5,20 @@ import { PageHeader, SearchInput, EmptyState } from "@/components/PageParts";
 import { Modal } from "@/components/Modal";
 import { Field, Select } from "@/components/Field";
 import { ImageUpload } from "@/components/ImageUpload";
-import { Plus, Pencil, Trash2, Loader2, Package } from "lucide-react";
+import { Plus, Pencil, Trash2, Loader2, Package, CheckSquare, Square, Layers } from "lucide-react";
 import { formatCurrency } from "@/lib/helpers";
+
+interface GroupedBlank {
+  groupKey: string;
+  baseCode: string;
+  blank_type_id: string;
+  blank_type_name?: string;
+  color: string;
+  price: number;
+  image_url: string | null;
+  sizes: string[];
+  items: Blank[];
+}
 
 export function BlanksPage() {
   const [items, setItems] = useState<Blank[]>([]);
@@ -17,15 +29,17 @@ export function BlanksPage() {
   const [search, setSearch] = useState("");
   const [filterType, setFilterType] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
-  const [editing, setEditing] = useState<Blank | null>(null);
+  const [editingGroup, setEditingGroup] = useState<GroupedBlank | null>(null);
+
   const [form, setForm] = useState({
     code: "",
     blank_type_id: "",
     color: "",
-    size: "",
+    selectedSizes: [] as string[],
     price: "",
     image_url: "" as string | null,
   });
+
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -52,49 +66,96 @@ export function BlanksPage() {
   }, []);
 
   function openCreate() {
-    setEditing(null);
-    setForm({ code: "", blank_type_id: "", color: "", size: "", price: "", image_url: null });
-    setError(null);
-    setModalOpen(true);
-  }
-
-  function openEdit(item: Blank) {
-    setEditing(item);
+    setEditingGroup(null);
     setForm({
-      code: item.code,
-      blank_type_id: item.blank_type_id,
-      color: item.color,
-      size: item.size,
-      price: String(item.price),
-      image_url: item.image_url,
+      code: "",
+      blank_type_id: "",
+      color: "",
+      selectedSizes: sizes.map((s) => s.code), // Mặc định chọn tất cả size
+      price: "",
+      image_url: null,
     });
     setError(null);
     setModalOpen(true);
   }
 
+  function openEdit(group: GroupedBlank) {
+    setEditingGroup(group);
+    setForm({
+      code: group.baseCode,
+      blank_type_id: group.blank_type_id,
+      color: group.color,
+      selectedSizes: group.sizes,
+      price: String(group.price),
+      image_url: group.image_url,
+    });
+    setError(null);
+    setModalOpen(true);
+  }
+
+  function toggleSize(sizeCode: string) {
+    if (form.selectedSizes.includes(sizeCode)) {
+      setForm({
+        ...form,
+        selectedSizes: form.selectedSizes.filter((s) => s !== sizeCode),
+      });
+    } else {
+      setForm({
+        ...form,
+        selectedSizes: [...form.selectedSizes, sizeCode],
+      });
+    }
+  }
+
+  function selectAllSizes() {
+    setForm({ ...form, selectedSizes: sizes.map((s) => s.code) });
+  }
+
+  function deselectAllSizes() {
+    setForm({ ...form, selectedSizes: [] });
+  }
+
   async function handleSave() {
     setError(null);
-    if (!form.code.trim() || !form.blank_type_id || !form.color || !form.size) {
-      setError("Mã, loại phôi, màu, size là bắt buộc.");
+    if (!form.code.trim() || !form.blank_type_id || !form.color) {
+      setError("Mã phôi, loại phôi và màu sắc là bắt buộc.");
       return;
     }
+    if (form.selectedSizes.length === 0) {
+      setError("Vui lòng chọn ít nhất 1 size.");
+      return;
+    }
+
     setSaving(true);
-    const payload = {
-      code: form.code.trim(),
-      blank_type_id: form.blank_type_id,
-      color: form.color,
-      size: form.size,
-      price: Number(form.price) || 0,
-      image_url: form.image_url,
-    };
+    const baseCode = form.code.trim().toUpperCase();
+    const priceNum = Number(form.price) || 0;
+
     try {
-      if (editing) {
-        const { error } = await supabase.from("blanks").update(payload).eq("id", editing.id);
-        if (error) throw error;
-      } else {
-        const { error } = await supabase.from("blanks").insert(payload);
-        if (error) throw error;
+      if (editingGroup) {
+        // Xóa toàn bộ biến thể cũ của nhóm này và tạo lại theo danh sách size mới
+        const oldIds = editingGroup.items.map((i) => i.id);
+        if (oldIds.length > 0) {
+          await supabase.from("blanks").delete().in("id", oldIds);
+        }
       }
+
+      // Tạo hàng loạt (Batch insert) danh sách phôi tương ứng với từng Size được tích chọn
+      const batchPayload = form.selectedSizes.map((szCode) => {
+        // Sinh SKU theo chuẩn: CT220-BLK-S
+        const fullCode = baseCode.endsWith(`-${szCode}`) ? baseCode : `${baseCode}-${szCode}`;
+        return {
+          code: fullCode,
+          blank_type_id: form.blank_type_id,
+          color: form.color,
+          size: szCode,
+          price: priceNum,
+          image_url: form.image_url,
+        };
+      });
+
+      const { error: insertErr } = await supabase.from("blanks").insert(batchPayload);
+      if (insertErr) throw insertErr;
+
       setModalOpen(false);
       await load();
     } catch (err) {
@@ -104,9 +165,10 @@ export function BlanksPage() {
     }
   }
 
-  async function handleDelete(item: Blank) {
-    if (!confirm(`Xóa phôi "${item.code}"?`)) return;
-    const { error } = await supabase.from("blanks").delete().eq("id", item.id);
+  async function handleDeleteGroup(group: GroupedBlank) {
+    if (!confirm(`Xóa toàn bộ các biến thể size của phôi "${group.baseCode}"?`)) return;
+    const ids = group.items.map((i) => i.id);
+    const { error } = await supabase.from("blanks").delete().in("id", ids);
     if (error) {
       alert(error.message);
       return;
@@ -114,20 +176,58 @@ export function BlanksPage() {
     await load();
   }
 
-  const filtered = items.filter((i) => {
+  // Hàm gom nhóm các phôi cùng loại + màu + ảnh thành 1 Master Row
+  function getGroupedBlanks(blanks: Blank[]): GroupedBlank[] {
+    const map = new Map<string, GroupedBlank>();
+
+    for (const b of blanks) {
+      const groupKey = `${b.blank_type_id}_${b.color}_${b.image_url || ""}_${b.price}`;
+
+      let baseCode = b.code;
+      if (b.size && baseCode.endsWith(`-${b.size}`)) {
+        baseCode = baseCode.slice(0, -(b.size.length + 1));
+      }
+
+      if (!map.has(groupKey)) {
+        map.set(groupKey, {
+          groupKey,
+          baseCode,
+          blank_type_id: b.blank_type_id,
+          blank_type_name: b.blank_types?.name,
+          color: b.color,
+          price: b.price,
+          image_url: b.image_url,
+          sizes: b.size ? [b.size] : [],
+          items: [b],
+        });
+      } else {
+        const existing = map.get(groupKey)!;
+        if (b.size && !existing.sizes.includes(b.size)) {
+          existing.sizes.push(b.size);
+        }
+        existing.items.push(b);
+      }
+    }
+
+    return Array.from(map.values());
+  }
+
+  const grouped = getGroupedBlanks(items);
+
+  const filteredGrouped = grouped.filter((g) => {
     const matchSearch =
-      i.code.toLowerCase().includes(search.toLowerCase()) ||
-      i.color.toLowerCase().includes(search.toLowerCase()) ||
-      i.size.toLowerCase().includes(search.toLowerCase());
-    const matchType = !filterType || i.blank_type_id === filterType;
+      g.baseCode.toLowerCase().includes(search.toLowerCase()) ||
+      g.color.toLowerCase().includes(search.toLowerCase()) ||
+      g.sizes.some((s) => s.toLowerCase().includes(search.toLowerCase()));
+    const matchType = !filterType || g.blank_type_id === filterType;
     return matchSearch && matchType;
   });
 
   return (
     <div className="animate-fade-in">
       <PageHeader
-        title="Phôi"
-        subtitle="Quản lý phôi theo loại, màu, size và giá"
+        title="Quản lý Phôi"
+        subtitle="Quản lý phôi theo mẫu phôi mẹ và các biến thể size (Master-Variant)"
         actions={
           <>
             <Select
@@ -137,12 +237,12 @@ export function BlanksPage() {
               options={types.map((t) => ({ value: t.id, label: t.name }))}
               placeholder="Tất cả loại"
             />
-            <SearchInput value={search} onChange={setSearch} placeholder="Tìm phôi..." />
+            <SearchInput value={search} onChange={setSearch} placeholder="Tìm mẫu phôi..." />
             <button
               onClick={openCreate}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-brand-500 text-white text-sm font-medium hover:bg-brand-600 transition-colors shadow-lg shadow-brand-500/20"
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-brand-500 text-white text-sm font-medium hover:bg-brand-600 transition-colors shadow-lg shadow-brand-500/20 shrink-0"
             >
-              <Plus size={18} /> Thêm
+              <Plus size={18} /> Thêm phôi mới
             </button>
           </>
         }
@@ -152,61 +252,83 @@ export function BlanksPage() {
         <div className="flex justify-center py-16">
           <Loader2 className="animate-spin text-slate-600" size={32} />
         </div>
-      ) : filtered.length === 0 ? (
+      ) : filteredGrouped.length === 0 ? (
         <div className="card-gradient rounded-2xl border border-slate-700/50">
-          <EmptyState message="Chưa có phôi nào. Nhấn Thêm để tạo." />
+          <EmptyState message="Chưa có phôi nào. Nhấn Thêm phôi mới để tạo." />
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {filtered.map((item) => {
-            const colorObj = colors.find((c) => c.code === item.color);
+          {filteredGrouped.map((group) => {
+            const colorObj = colors.find((c) => c.code === group.color);
             return (
               <div
-                key={item.id}
-                className="card-gradient rounded-2xl border border-slate-700/50 overflow-hidden hover:border-slate-600 transition-colors group"
+                key={group.groupKey}
+                className="card-gradient rounded-2xl border border-slate-700/50 overflow-hidden hover:border-slate-600 transition-colors group flex flex-col justify-between"
               >
-                <div className="aspect-square bg-slate-800/30 flex items-center justify-center overflow-hidden">
-                  {item.image_url ? (
-                    <img src={item.image_url} alt={item.code} className="w-full h-full object-contain" />
-                  ) : (
-                    <Package size={40} className="text-slate-700" />
-                  )}
-                </div>
-                <div className="p-4">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="font-mono text-sm font-semibold text-brand-400">{item.code}</span>
-                    <span className="text-sm font-bold text-slate-200">
-                      {formatCurrency(item.price)}
-                    </span>
-                  </div>
-                  <p className="text-xs text-slate-400 mb-2">
-                    {item.blank_types?.name || "—"}
-                  </p>
-                  <div className="flex items-center gap-2">
-                    {colorObj && (
-                      <span className="flex items-center gap-1.5 text-xs text-slate-400">
-                        <span
-                          className="w-3.5 h-3.5 rounded-full border border-slate-600"
-                          style={{ background: colorObj.hex || "#ccc" }}
-                        />
-                        {colorObj.name}
-                      </span>
+                <div>
+                  <div className="aspect-square bg-slate-800/30 flex items-center justify-center overflow-hidden relative">
+                    {group.image_url ? (
+                      <img src={group.image_url} alt={group.baseCode} className="w-full h-full object-contain p-2" />
+                    ) : (
+                      <Package size={40} className="text-slate-700" />
                     )}
-                    <span className="px-2 py-0.5 rounded-md bg-slate-800 text-xs font-medium text-slate-400">
-                      {item.size}
+                    <span className="absolute top-2 right-2 px-2 py-1 rounded-lg bg-slate-950/80 backdrop-blur-md text-[11px] font-mono font-medium text-emerald-400 border border-slate-700">
+                      {group.sizes.length} Size
                     </span>
                   </div>
+
+                  <div className="p-4">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-mono text-sm font-bold text-brand-400">{group.baseCode}</span>
+                      <span className="text-sm font-bold text-slate-200">
+                        {formatCurrency(group.price)}
+                      </span>
+                    </div>
+
+                    <p className="text-xs text-slate-400 mb-2">
+                      {group.blank_type_name || "—"}
+                    </p>
+
+                    <div className="flex items-center justify-between gap-2 mb-3">
+                      {colorObj && (
+                        <span className="flex items-center gap-1.5 text-xs text-slate-300">
+                          <span
+                            className="w-3.5 h-3.5 rounded-full border border-slate-600 shrink-0"
+                            style={{ background: colorObj.hex || "#ccc" }}
+                          />
+                          {colorObj.name} ({colorObj.code})
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Danh sách các Biến thể Size */}
+                    <div className="space-y-1">
+                      <span className="text-[11px] font-medium text-slate-400 block">Các size sẵn có:</span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {group.sizes.map((sz) => (
+                          <span
+                            key={sz}
+                            className="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 text-xs font-mono text-slate-200 font-semibold"
+                          >
+                            {sz}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
                 </div>
-                <div className="px-4 pb-4 flex gap-2">
+
+                <div className="px-4 pb-4 pt-2 flex gap-2">
                   <button
-                    onClick={() => openEdit(item)}
+                    onClick={() => openEdit(group)}
                     className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl border border-slate-700 text-slate-300 text-xs font-medium hover:bg-slate-800 transition-colors"
                   >
-                    <Pencil size={14} /> Sửa
+                    <Pencil size={14} /> Sửa mẫu & Size
                   </button>
                   <button
-                    onClick={() => handleDelete(item)}
+                    onClick={() => handleDeleteGroup(group)}
                     className="px-3 py-2 rounded-xl border border-slate-700 text-slate-500 hover:bg-rose-500/10 hover:text-rose-400 hover:border-rose-500/30 transition-colors"
+                    title="Xóa mẫu phôi này"
                   >
                     <Trash2 size={14} />
                   </button>
@@ -217,19 +339,20 @@ export function BlanksPage() {
         </div>
       )}
 
+      {/* Modal Thêm / Chỉnh sửa Phôi Biến Thể */}
       <Modal
         open={modalOpen}
         onClose={() => setModalOpen(false)}
-        title={editing ? "Sửa phôi" : "Thêm phôi"}
+        title={editingGroup ? `Sửa phôi (${editingGroup.baseCode})` : "Thêm mẫu phôi mới"}
         size="xl"
       >
         <div className="grid sm:grid-cols-2 gap-4">
           <div className="space-y-4">
             <Field
-              label="Mã phôi"
+              label="Mã phôi cơ sở (Master Code)"
               value={form.code}
               onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })}
-              placeholder="CT220"
+              placeholder="CT220-BLK"
             />
             <Select
               label="Loại phôi"
@@ -239,38 +362,87 @@ export function BlanksPage() {
               placeholder="Chọn loại phôi"
             />
             <Select
-              label="Màu"
+              label="Màu sắc"
               value={form.color}
               onChange={(v) => setForm({ ...form, color: v })}
               options={colors.map((c) => ({ value: c.code, label: `${c.code} — ${c.name}` }))}
-              placeholder="Chọn màu"
-            />
-            <Select
-              label="Size"
-              value={form.size}
-              onChange={(v) => setForm({ ...form, size: v })}
-              options={sizes.map((s) => ({ value: s.code, label: s.name }))}
-              placeholder="Chọn size"
+              placeholder="Chọn màu sắc"
             />
             <Field
-              label="Giá (VND)"
+              label="Giá phôi (VND)"
               type="number"
               value={form.price}
               onChange={(e) => setForm({ ...form, price: e.target.value })}
-              placeholder="0"
+              placeholder="120000"
             />
+
+            {/* Chọn nhiều Size biến thể cùng lúc */}
+            <div className="space-y-2 pt-1">
+              <div className="flex items-center justify-between">
+                <label className="block text-sm font-medium text-slate-300">
+                  Chọn các Size biến thể có sẵn:
+                </label>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={selectAllSizes}
+                    className="text-xs text-brand-400 hover:underline font-medium"
+                  >
+                    Chọn tất cả
+                  </button>
+                  <span className="text-slate-600">|</span>
+                  <button
+                    type="button"
+                    onClick={deselectAllSizes}
+                    className="text-xs text-slate-400 hover:underline"
+                  >
+                    Bỏ chọn
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                {sizes.map((s) => {
+                  const checked = form.selectedSizes.includes(s.code);
+                  return (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => toggleSize(s.code)}
+                      className={`flex items-center justify-between px-3 py-2 rounded-xl border text-xs font-semibold transition-all ${
+                        checked
+                          ? "bg-brand-500/10 border-brand-500/40 text-brand-400"
+                          : "bg-slate-800/40 border-slate-700/60 text-slate-400 hover:bg-slate-800"
+                      }`}
+                    >
+                      <span>{s.name}</span>
+                      {checked ? (
+                        <CheckSquare size={14} className="text-brand-400" />
+                      ) : (
+                        <Square size={14} className="text-slate-600" />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
           </div>
+
           <div>
             <ImageUpload
               folder="blanks"
               value={form.image_url}
               onChange={(url) => setForm({ ...form, image_url: url })}
-              label="Ảnh phôi"
+              label="Ảnh đại diện phôi"
+              customCode={form.code ? `PHOI_${form.code}` : undefined}
+              oldUrl={editingGroup?.image_url}
             />
           </div>
         </div>
+
         {error && <p className="text-sm text-rose-400 mt-4">{error}</p>}
-        <div className="flex gap-2.5 pt-5">
+
+        <div className="flex gap-2.5 pt-5 border-t border-slate-800 mt-4">
           <button
             onClick={() => setModalOpen(false)}
             className="flex-1 py-2.5 rounded-xl border border-slate-700 text-slate-300 text-sm font-medium hover:bg-slate-800 transition-colors"
@@ -282,7 +454,8 @@ export function BlanksPage() {
             disabled={saving}
             className="flex-1 py-2.5 rounded-xl bg-brand-500 text-white text-sm font-medium hover:bg-brand-600 transition-colors flex items-center justify-center gap-2"
           >
-            {saving && <Loader2 size={16} className="animate-spin" />} Lưu
+            {saving && <Loader2 size={16} className="animate-spin" />}
+            {editingGroup ? "Lưu thay đổi mẫu phôi" : "Tạo mẫu phôi & các Size"}
           </button>
         </div>
       </Modal>

@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { useAuth } from "@/context/AuthContext";
+import { useSync } from "@/context/SyncContext";
 import { emailToUsername } from "@/lib/helpers";
 import {
   Shirt,
@@ -15,6 +16,8 @@ import {
   X,
   ShieldCheck,
   UserCircle,
+  Cloud,
+  HardDrive,
 } from "lucide-react";
 
 export type PageKey =
@@ -44,6 +47,7 @@ const navItems: { key: PageKey; label: string; icon: typeof LayoutDashboard; adm
 
 export function Layout({ current, onNavigate, children }: LayoutProps) {
   const { profile, signOut } = useAuth();
+  const { enableR2, enableDrive, toggleR2, toggleDrive } = useSync();
   const [mobileOpen, setMobileOpen] = useState(false);
   const isAdmin = profile?.role === "admin";
 
@@ -129,19 +133,60 @@ export function Layout({ current, onNavigate, children }: LayoutProps) {
         />
       )}
 
-      {/* Main */}
+      {/* Main Container */}
       <div className="flex-1 min-w-0 flex flex-col">
-        <header className="h-16 lg:hidden flex items-center gap-3 px-4 bg-slate-900 border-b border-slate-800 sticky top-0 z-20">
-          <button
-            onClick={() => setMobileOpen(true)}
-            className="p-2 rounded-lg text-slate-400 hover:bg-slate-800"
-          >
-            <Menu size={20} />
-          </button>
-          <img src="/logo.png" alt="Logo" className="w-7 h-7 object-contain" />
-          <span className="font-semibold text-slate-200 text-sm sm:text-base">
-            {navItems.find((i) => i.key === current)?.label}
-          </span>
+        {/* Universal Header across all pages */}
+        <header className="h-16 flex items-center justify-between px-4 sm:px-6 bg-slate-900/90 backdrop-blur-md border-b border-slate-800 sticky top-0 z-30">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setMobileOpen(true)}
+              className="p-2 rounded-xl text-slate-400 hover:bg-slate-800 lg:hidden"
+            >
+              <Menu size={20} />
+            </button>
+            <div className="flex items-center gap-2">
+              <span className="font-semibold text-slate-200 text-sm sm:text-base">
+                {navItems.find((i) => i.key === current)?.label}
+              </span>
+            </div>
+          </div>
+
+          {/* Sync Status Indicators */}
+          <div className="flex items-center gap-2">
+            <span className="hidden sm:inline-block text-xs text-slate-500 font-medium mr-1">
+              Đồng bộ:
+            </span>
+
+            {/* R2 Sync Badge */}
+            <button
+              onClick={toggleR2}
+              title={enableR2 ? "Cloudflare R2: Đang BẬT đồng bộ file gốc HD. Bấm để TẮT." : "Cloudflare R2: Đang TẮT đồng bộ. Bấm để BẬT."}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border transition-all ${
+                enableR2
+                  ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/20"
+                  : "bg-slate-800 text-slate-500 border-slate-700 hover:bg-slate-700/50"
+              }`}
+            >
+              <Cloud size={13} className={enableR2 ? "text-emerald-400" : "text-slate-500"} />
+              <span>R2</span>
+              <span className={`w-1.5 h-1.5 rounded-full ${enableR2 ? "bg-emerald-400 animate-pulse" : "bg-slate-600"}`} />
+            </button>
+
+            {/* Drive Sync Badge */}
+            <button
+              onClick={toggleDrive}
+              title={enableDrive ? "Google Drive: Đang BẬT đồng bộ file gốc HD. Bấm để TẮT." : "Google Drive: Đang TẮT đồng bộ. Bấm để BẬT."}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border transition-all ${
+                enableDrive
+                  ? "bg-sky-500/10 text-sky-400 border-sky-500/30 hover:bg-sky-500/20"
+                  : "bg-slate-800 text-slate-500 border-slate-700 hover:bg-slate-700/50"
+              }`}
+            >
+              <HardDrive size={13} className={enableDrive ? "text-sky-400" : "text-slate-500"} />
+              <span>Drive</span>
+              <span className={`w-1.5 h-1.5 rounded-full ${enableDrive ? "bg-sky-400 animate-pulse" : "bg-slate-600"}`} />
+            </button>
+          </div>
         </header>
 
         <main className="flex-1 p-3 sm:p-5 lg:p-8">{children}</main>

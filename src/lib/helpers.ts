@@ -11,34 +11,166 @@ function fileToDataUrl(file: File): Promise<string> {
   });
 }
 
+export async function compressImageForPreview(
+  file: File,
+  maxWidth = 800,
+  quality = 0.82
+): Promise<File> {
+  if (!file.type.startsWith("image/") || file.type.includes("svg")) {
+    return file;
+  }
+
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target?.result as string;
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        let width = img.width;
+        let height = img.height;
+
+        if (width > maxWidth) {
+          height = Math.round((height * maxWidth) / width);
+          width = maxWidth;
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          resolve(file);
+          return;
+        }
+
+        ctx.drawImage(img, 0, 0, width, height);
+
+        canvas.toBlob(
+          (blob) => {
+            if (!blob) {
+              resolve(file);
+              return;
+            }
+            const cleanName = file.name.replace(/\.[^/.]+$/, "").replace(/[^a-zA-Z0-9_-]/g, "_");
+            const compressedFile = new File([blob], `${cleanName}.webp`, {
+              type: "image/webp",
+              lastModified: Date.now(),
+            });
+            resolve(compressedFile);
+          },
+          "image/webp",
+          quality
+        );
+      };
+      img.onerror = () => resolve(file);
+    };
+    reader.onerror = () => resolve(file);
+  });
+}
+
 export async function uploadFile(
   file: File,
-  folder: string
+  folder: string,
+  customCode?: string,
+  oldUrl?: string | null
 ): Promise<string | null> {
   try {
-    const ext = file.name.split(".").pop() || "png";
-    const fileName = `${folder}/${Date.now()}-${Math.random()
-      .toString(36)
-      .slice(2)}.${ext}`;
-    const { error } = await supabase.storage
-      .from("tshirt-assets")
-      .upload(fileName, file, { cacheControl: "3600", upsert: false });
+    const originalFile = file;
+    // 1. Nén ảnh bằng Client Canvas trước khi lưu vào Supabase (WebP ~100KB)
+    const compressedFile = await compressImageForPreview(file, 800, 0.82);
 
-    if (!error) {
+    let fileName = "";
+    const sanitizedCode = customCode ? customCode.trim().replace(/[^a-zA-Z0-9_-]/g, "_").toUpperCase() : "";
+
+    if (sanitizedCode) {
+      const ext = compressedFile.name.split(".").pop() || "webp";
+      fileName = `${folder}/${sanitizedCode}.${ext}`;
+
+      // Nếu có hình cũ và trùng tên, thực hiện di chuyển / archive file cũ trên Supabase
+      if (oldUrl && oldUrl.includes(fileName)) {
+        const nowStr = new Date().toISOString().replace(/[-:T.]/g, "").slice(0, 14);
+        const archiveName = `${folder}/archive/${sanitizedCode}_${nowStr}.${ext}`;
+        await supabase.storage.from("tshirt-assets").move(fileName, archiveName).catch(() => {});
+      }
+    } else {
+      const ext = compressedFile.name.split(".").pop() || "webp";
+      fileName = `${folder}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+    }
+
+    // 2. Upload file nén siêu nhẹ vào Supabase Storage
+    const { error: uploadError } = await supabase.storage
+      .from("tshirt-assets")
+      .upload(fileName, compressedFile, { cacheControl: "3600", upsert: true });
+
+    let publicUrl: string | null = null;
+    if (!uploadError) {
       const { data } = supabase.storage
         .from("tshirt-assets")
         .getPublicUrl(fileName);
-      if (data?.publicUrl) return data.publicUrl;
+      if (data?.publicUrl) publicUrl = data.publicUrl;
     }
 
-    console.warn("Supabase Storage error, falling back to Data URL:", error?.message);
-    return await fileToDataUrl(file);
+    // 3. Đồng thời gửi file GỐC (chưa nén) tới Node.js Worker Service (nếu có) để đẩy sang Cloudflare R2 & Google Drive
+    syncOriginalFileToR2AndDrive(originalFile, folder, sanitizedCode).catch((err) => {
+      console.info("Node.js Worker status (Cloudflare R2 & Google Drive sync):", (err as Error).message);
+    });
+
+    if (publicUrl) return publicUrl;
+
+    console.warn("Supabase Storage error, falling back to Data URL:", uploadError?.message);
+    return await fileToDataUrl(compressedFile);
   } catch (err) {
     console.error("Upload error, using fallback Data URL:", err);
     try {
       return await fileToDataUrl(file);
     } catch {
       return null;
+    }
+  }
+}
+
+import { uploadOriginalToR2 } from "./r2Storage";
+import { uploadOriginalToGoogleDrive } from "./googleDriveStorage";
+import { getSyncSettingsState } from "@/context/SyncContext";
+
+async function syncOriginalFileToR2AndDrive(
+  file: File,
+  folder: string,
+  code?: string
+): Promise<void> {
+  const { enableR2, enableDrive } = getSyncSettingsState();
+
+  // 1. Upload trực tiếp từ trình duyệt React lên Cloudflare R2 (nếu đang BẬT)
+  if (enableR2) {
+    await uploadOriginalToR2(file, folder, code);
+  } else {
+    console.info("⚡ [Sync]: Đã bỏ qua R2 vì đồng bộ Cloudflare R2 đang TẮT.");
+  }
+
+  // 2. Upload trực tiếp từ trình duyệt React lên Google Drive (nếu đang BẬT)
+  if (enableDrive) {
+    await uploadOriginalToGoogleDrive(file, folder, code);
+  } else {
+    console.info("⚡ [Sync]: Đã bỏ qua Google Drive vì đồng bộ Google Drive đang TẮT.");
+  }
+
+  // 3. Nếu có Node.js server phụ trợ, đồng bộ thêm nếu cần
+  const nodeServerUrl = import.meta.env.VITE_NODE_SERVER_URL;
+  if (nodeServerUrl && (enableR2 || enableDrive)) {
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("folder", folder);
+      if (code) formData.append("code", code);
+
+      await fetch(`${nodeServerUrl}/api/storage/upload-original`, {
+        method: "POST",
+        body: formData,
+      });
+    } catch {
+      // Bỏ qua nếu Node server chưa bật
     }
   }
 }
@@ -159,5 +291,39 @@ export async function callUserManagement<T>(payload: Record<string, unknown>): P
   }
 
   throw new Error("Action không hợp lệ");
+}
+
+export function formatColorName(colorCode: string | null | undefined): string {
+  if (!colorCode) return "Chưa xác định";
+  const code = colorCode.trim().toUpperCase();
+
+  const colorMap: Record<string, string> = {
+    D: "Đen",
+    DEN: "Đen",
+    BLACK: "Đen",
+    T: "Trắng",
+    TRANG: "Trắng",
+    WHITE: "Trắng",
+    DO: "Đỏ",
+    RED: "Đỏ",
+    V: "Vàng",
+    YELLOW: "Vàng",
+    XD: "Xanh Dương",
+    BLUE: "Xanh Dương",
+    XL: "Xanh Lá",
+    GREEN: "Xanh Lá",
+    X: "Xám",
+    GREY: "Xám",
+    GRAY: "Xám",
+    H: "Hồng",
+    PINK: "Hồng",
+    C: "Cam",
+    ORANGE: "Cam",
+    K: "Kem",
+    BEIGE: "Kem",
+    KM: "Khoai Môn",
+  };
+
+  return colorMap[code] || colorCode;
 }
 

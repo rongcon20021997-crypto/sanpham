@@ -299,12 +299,16 @@ export function PrintDesignsPage() {
               onChange={(url) => setForm({ ...form, png_url: url })}
               label="File PNG (nền trong)"
               accept="image/png"
+              customCode={form.code ? `HINHIN_${form.code}` : undefined}
+              oldUrl={editing?.png_url}
             />
             <ImageUpload
               folder="designs-thumb"
               value={form.thumbnail_url}
               onChange={(url) => setForm({ ...form, thumbnail_url: url })}
               label="Thumbnail"
+              customCode={form.code ? `HINHIN_${form.code}_THUMB` : undefined}
+              oldUrl={editing?.thumbnail_url}
             />
           </div>
         </div>

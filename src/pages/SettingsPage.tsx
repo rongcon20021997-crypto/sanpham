@@ -3,10 +3,11 @@ import { supabase } from "@/lib/supabase";
 import type { Color, Size, Theme, CodeRule } from "@/lib/types";
 import { PageHeader, EmptyState } from "@/components/PageParts";
 import { Field } from "@/components/Field";
-import { Plus, Trash2, Loader2, Palette, Ruler, Tag, Code2, Save, Check } from "lucide-react";
+import { useSync } from "@/context/SyncContext";
+import { Plus, Trash2, Loader2, Palette, Ruler, Tag, Code2, Save, Check, Cloud, HardDrive, RefreshCw } from "lucide-react";
 
 export function SettingsPage() {
-  const [tab, setTab] = useState<"colors" | "sizes" | "themes" | "code">("colors");
+  const [tab, setTab] = useState<"colors" | "sizes" | "themes" | "code" | "sync">("sync");
   const [loading, setLoading] = useState(true);
   const [colors, setColors] = useState<Color[]>([]);
   const [sizes, setSizes] = useState<Size[]>([]);
@@ -30,6 +31,7 @@ export function SettingsPage() {
   }, []);
 
   const tabs = [
+    { key: "sync" as const, label: "Đồng bộ lưu trữ", icon: RefreshCw },
     { key: "colors" as const, label: "Màu", icon: Palette },
     { key: "sizes" as const, label: "Size", icon: Ruler },
     { key: "themes" as const, label: "Chủ đề", icon: Tag },
@@ -38,9 +40,9 @@ export function SettingsPage() {
 
   return (
     <div className="animate-fade-in">
-      <PageHeader title="Cài đặt" subtitle="Quản lý danh mục màu, size, chủ đề và quy tắc sinh mã" />
+      <PageHeader title="Cài đặt" subtitle="Quản lý danh mục màu, size, chủ đề, quy tắc mã và đồng bộ lưu trữ" />
 
-      <div className="flex gap-1 p-1 bg-slate-900 rounded-xl border border-slate-700/50 mb-6 w-fit">
+      <div className="flex flex-wrap gap-1 p-1 bg-slate-900 rounded-xl border border-slate-700/50 mb-6 w-fit">
         {tabs.map((t) => {
           const Icon = t.icon;
           return (
@@ -58,12 +60,95 @@ export function SettingsPage() {
         <div className="flex justify-center py-16"><Loader2 className="animate-spin text-slate-600" size={32} /></div>
       ) : (
         <>
+          {tab === "sync" && <SyncTab />}
           {tab === "colors" && <ColorsTab colors={colors} setColors={setColors} />}
           {tab === "sizes" && <SizesTab sizes={sizes} setSizes={setSizes} />}
           {tab === "themes" && <ThemesTab themes={themes} setThemes={setThemes} />}
           {tab === "code" && <CodeTab codeRule={codeRule} setCodeRule={setCodeRule} />}
         </>
       )}
+    </div>
+  );
+}
+
+function SyncTab() {
+  const { enableR2, enableDrive, setEnableR2, setEnableDrive } = useSync();
+
+  return (
+    <div className="card-gradient rounded-2xl border border-slate-700/50 p-6 max-w-2xl space-y-6">
+      <div>
+        <h3 className="font-semibold text-slate-100 text-base mb-1 flex items-center gap-2">
+          <RefreshCw size={18} className="text-brand-400" /> Cài đặt đồng bộ hình ảnh gốc
+        </h3>
+        <p className="text-xs text-slate-400">
+          Khi tải ảnh phôi hoặc hình in, ứng dụng tự động nén ảnh WebP nhỏ gọn (~100KB) lên Supabase để hiển thị UI.
+          Tùy chọn bên dưới cho phép bạn BẬT/TẮT đồng bộ file GỐC HD sang Cloudflare R2 & Google Drive.
+        </p>
+      </div>
+
+      <div className="space-y-4">
+        {/* Cloudflare R2 Toggle */}
+        <div className="flex items-center justify-between p-4 rounded-xl bg-slate-800/50 border border-slate-700/50 hover:border-slate-600 transition-colors">
+          <div className="flex items-center gap-3">
+            <div className={`p-2.5 rounded-xl ${enableR2 ? "bg-emerald-500/10 text-emerald-400" : "bg-slate-700/50 text-slate-500"}`}>
+              <Cloud size={22} />
+            </div>
+            <div>
+              <p className="text-sm font-medium text-slate-200 flex items-center gap-2">
+                Cloudflare R2 Storage
+                <span className={`px-2 py-0.5 rounded-md text-[10px] font-medium ${enableR2 ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" : "bg-slate-700 text-slate-400"}`}>
+                  {enableR2 ? "ĐANG BẬT" : "ĐANG TẮT"}
+                </span>
+              </p>
+              <p className="text-xs text-slate-400 mt-0.5">Tự động tải file gốc HD chất lượng cao lên Cloudflare R2</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setEnableR2(!enableR2)}
+            className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+              enableR2 ? "bg-emerald-500" : "bg-slate-700"
+            }`}
+          >
+            <span
+              className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
+                enableR2 ? "translate-x-5" : "translate-x-0"
+              }`}
+            />
+          </button>
+        </div>
+
+        {/* Google Drive Toggle */}
+        <div className="flex items-center justify-between p-4 rounded-xl bg-slate-800/50 border border-slate-700/50 hover:border-slate-600 transition-colors">
+          <div className="flex items-center gap-3">
+            <div className={`p-2.5 rounded-xl ${enableDrive ? "bg-sky-500/10 text-sky-400" : "bg-slate-700/50 text-slate-500"}`}>
+              <HardDrive size={22} />
+            </div>
+            <div>
+              <p className="text-sm font-medium text-slate-200 flex items-center gap-2">
+                Google Drive Backup
+                <span className={`px-2 py-0.5 rounded-md text-[10px] font-medium ${enableDrive ? "bg-sky-500/10 text-sky-400 border border-sky-500/20" : "bg-slate-700 text-slate-400"}`}>
+                  {enableDrive ? "ĐANG BẬT" : "ĐANG TẮT"}
+                </span>
+              </p>
+              <p className="text-xs text-slate-400 mt-0.5">Tự động đẩy bản sao file gốc lên Google Drive xưởng in</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setEnableDrive(!enableDrive)}
+            className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+              enableDrive ? "bg-sky-500" : "bg-slate-700"
+            }`}
+          >
+            <span
+              className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
+                enableDrive ? "translate-x-5" : "translate-x-0"
+              }`}
+            />
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

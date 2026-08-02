@@ -43,10 +43,14 @@ function AppContent() {
   );
 }
 
+import { SyncProvider } from "@/context/SyncContext";
+
 export default function App() {
   return (
     <AuthProvider>
-      <AppContent />
+      <SyncProvider>
+        <AppContent />
+      </SyncProvider>
     </AuthProvider>
   );
 }
