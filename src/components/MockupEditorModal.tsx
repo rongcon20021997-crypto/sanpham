@@ -58,7 +58,7 @@ export function MockupEditorModal({
 
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Chỉ reset vị trí đúng một lần khi mở Modal (Chữa triệt để lỗi tự reset về ban đầu)
+  // Load initial position when opening Modal or when initialPosition changes
   useEffect(() => {
     if (open) {
       const defaultX = initialPosition?.posX ?? 50;
@@ -71,7 +71,7 @@ export function MockupEditorModal({
       actionTypeRef.current = null;
       setActiveAction(null);
     }
-  }, [open]);
+  }, [open, initialPosition]);
 
   // Các Preset cài đặt sẵn vị trí nhanh
   const presets = [

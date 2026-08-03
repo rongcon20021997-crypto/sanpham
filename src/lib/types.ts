@@ -69,6 +69,12 @@ export interface PrintDesign {
   created_at: string;
 }
 
+export interface PrintPositionData {
+  posX: number;
+  posY: number;
+  scale: number;
+}
+
 export interface Product {
   id: string;
   code: string;
@@ -80,6 +86,7 @@ export interface Product {
   blank_id: string;
   print_design_id: string;
   preview_url: string | null;
+  print_position?: PrintPositionData | null;
   price: number;
   status: "active" | "inactive";
   created_at: string;

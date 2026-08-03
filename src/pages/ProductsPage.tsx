@@ -41,6 +41,7 @@ export interface MasterProductGroup {
 }
 
 import { MockupEditorModal } from "@/components/MockupEditorModal";
+import type { PrintPositionData } from "@/lib/types";
 
 export interface MockupEditorTarget {
   masterCode: string;
@@ -48,6 +49,7 @@ export interface MockupEditorTarget {
   blankImageUrl: string | null;
   printDesignUrl: string | null;
   variantIds: string[];
+  initialPosition?: PrintPositionData | null;
 }
 
 export function ProductsPage() {
@@ -572,6 +574,7 @@ export function ProductsPage() {
                                   blankImageUrl: cg.blank_image,
                                   printDesignUrl: group.print_design?.png_url || null,
                                   variantIds: cg.variants.map((v) => v.id),
+                                  initialPosition: cg.variants.find((v) => v.print_position)?.print_position || cg.variants[0]?.print_position || null,
                                 })
                               }
                               className="px-3 py-1.5 rounded-xl bg-brand-500/10 text-brand-400 hover:bg-brand-500/20 transition-colors text-xs font-semibold flex items-center gap-1.5 border border-brand-500/30"
@@ -809,13 +812,17 @@ export function ProductsPage() {
         blankImageUrl={mockupEditorTarget?.blankImageUrl || null}
         printDesignUrl={mockupEditorTarget?.printDesignUrl || null}
         masterCode={mockupEditorTarget?.masterCode}
-        onSaveMockup={async (newMockupUrl) => {
+        initialPosition={mockupEditorTarget?.initialPosition || undefined}
+        onSaveMockup={async (newMockupUrl, position) => {
           if (!mockupEditorTarget) return;
           
-          // Cập nhật preview_url cho toàn bộ biến thể thuộc Phôi màu này
+          // Cập nhật preview_url và print_position cho toàn bộ biến thể thuộc Phôi màu này
           await supabase
             .from("products")
-            .update({ preview_url: newMockupUrl })
+            .update({
+              preview_url: newMockupUrl,
+              print_position: position,
+            })
             .in("id", mockupEditorTarget.variantIds);
 
           await load();
