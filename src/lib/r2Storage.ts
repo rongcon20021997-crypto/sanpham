@@ -102,3 +102,33 @@ export async function uploadOriginalToR2(
     return null;
   }
 }
+
+/**
+ * Lấy URL file GỐC HD từ Cloudflare R2 để thực hiện cắt/sửa ảnh ở chất lượng gốc cao nhất
+ */
+export function getR2OriginalUrl(
+  folder: string,
+  code?: string,
+  fallbackUrl?: string | null
+): string | null {
+  const accountId = import.meta.env.VITE_R2_ACCOUNT_ID;
+  const bucketName = import.meta.env.VITE_R2_BUCKET_NAME || "tshirt-assets-hd";
+  const publicDomain = import.meta.env.VITE_R2_PUBLIC_DOMAIN;
+
+  const sanitizedCode = code ? code.trim().replace(/[^a-zA-Z0-9_-]/g, "_").toUpperCase() : "";
+
+  if (sanitizedCode) {
+    const key = `${folder}/${sanitizedCode}.png`;
+    const t = Date.now();
+    if (publicDomain) {
+      const cleanDomain = publicDomain.endsWith("/") ? publicDomain.slice(0, -1) : publicDomain;
+      return `${cleanDomain}/${key}?t=${t}`;
+    }
+    if (accountId) {
+      return `https://${accountId}.r2.cloudflarestorage.com/${bucketName}/${key}?t=${t}`;
+    }
+  }
+
+  return fallbackUrl || null;
+}
+

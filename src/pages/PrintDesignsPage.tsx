@@ -5,7 +5,8 @@ import { PageHeader, SearchInput, EmptyState } from "@/components/PageParts";
 import { Modal } from "@/components/Modal";
 import { Field, Select } from "@/components/Field";
 import { ImageUpload } from "@/components/ImageUpload";
-import { Plus, Pencil, Trash2, Loader2, Image as ImageIcon, Tag, X } from "lucide-react";
+import { ImageCropperModal } from "@/components/ImageCropperModal";
+import { Plus, Pencil, Trash2, Loader2, Image as ImageIcon, Tag, X, Crop } from "lucide-react";
 
 export function PrintDesignsPage() {
   const [items, setItems] = useState<PrintDesign[]>([]);
@@ -15,6 +16,7 @@ export function PrintDesignsPage() {
   const [filterTheme, setFilterTheme] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<PrintDesign | null>(null);
+  const [croppingItem, setCroppingItem] = useState<PrintDesign | null>(null);
   const [form, setForm] = useState({
     code: "",
     name: "",
@@ -122,6 +124,20 @@ export function PrintDesignsPage() {
     await load();
   }
 
+  async function handleSaveCroppedImage(newUrl: string) {
+    if (!croppingItem) return;
+    const { error } = await supabase
+      .from("print_designs")
+      .update({ png_url: newUrl, thumbnail_url: newUrl })
+      .eq("id", croppingItem.id);
+    if (error) {
+      alert("Lỗi cập nhật hình in: " + error.message);
+      return;
+    }
+    setCroppingItem(null);
+    await load();
+  }
+
   const filtered = items.filter((i) => {
     const matchSearch =
       i.code.toLowerCase().includes(search.toLowerCase()) ||
@@ -186,16 +202,25 @@ export function PrintDesignsPage() {
                     {item.code}
                   </span>
                 </div>
-                <div className="absolute inset-0 bg-slate-950/0 group-hover:bg-slate-950/20 transition-colors flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
+                <div className="absolute inset-0 bg-slate-950/0 group-hover:bg-slate-950/40 transition-colors flex items-center justify-center gap-1.5 opacity-0 group-hover:opacity-100 p-2">
+                  <button
+                    onClick={() => setCroppingItem(item)}
+                    title="Cắt & Sửa viền hình in"
+                    className="p-2 rounded-lg bg-slate-800 text-slate-200 shadow-lg hover:text-brand-400 border border-slate-700 hover:bg-slate-700 transition-colors"
+                  >
+                    <Crop size={16} />
+                  </button>
                   <button
                     onClick={() => openEdit(item)}
-                    className="p-2 rounded-lg bg-slate-800 text-slate-300 shadow-lg hover:text-brand-400 border border-slate-700"
+                    title="Chỉnh sửa thông tin"
+                    className="p-2 rounded-lg bg-slate-800 text-slate-200 shadow-lg hover:text-brand-400 border border-slate-700 hover:bg-slate-700 transition-colors"
                   >
                     <Pencil size={16} />
                   </button>
                   <button
                     onClick={() => handleDelete(item)}
-                    className="p-2 rounded-lg bg-slate-800 text-slate-300 shadow-lg hover:text-rose-400 border border-slate-700"
+                    title="Xóa hình in"
+                    className="p-2 rounded-lg bg-slate-800 text-slate-200 shadow-lg hover:text-rose-400 border border-slate-700 hover:bg-slate-700 transition-colors"
                   >
                     <Trash2 size={16} />
                   </button>
@@ -329,6 +354,20 @@ export function PrintDesignsPage() {
           </button>
         </div>
       </Modal>
+
+      {/* Modal Cắt & Sửa Hình In độc lập */}
+      {croppingItem && (croppingItem.png_url || croppingItem.thumbnail_url) && (
+        <ImageCropperModal
+          open={!!croppingItem}
+          onClose={() => setCroppingItem(null)}
+          imageUrl={(croppingItem.png_url || croppingItem.thumbnail_url) as string}
+          onSave={handleSaveCroppedImage}
+          title={`Cắt & Chỉnh sửa hình in (${croppingItem.code} - ${croppingItem.name})`}
+          folder="designs-png"
+          customCode={`HINHIN_${croppingItem.code}`}
+          oldUrl={croppingItem.png_url}
+        />
+      )}
     </div>
   );
 }

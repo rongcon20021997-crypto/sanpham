@@ -1,6 +1,7 @@
-import { Upload, X, Loader2 } from "lucide-react";
+import { Upload, X, Loader2, Crop } from "lucide-react";
 import { useRef, useState } from "react";
 import { uploadFile } from "@/lib/helpers";
+import { ImageCropperModal } from "./ImageCropperModal";
 
 interface ImageUploadProps {
   folder: string;
@@ -25,6 +26,7 @@ export function ImageUpload({
 }: ImageUploadProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
+  const [cropperOpen, setCropperOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -84,13 +86,22 @@ export function ImageUpload({
           </button>
         )}
         {value && !uploading && (
-          <button
-            type="button"
-            onClick={() => inputRef.current?.click()}
-            className="absolute bottom-2 left-2 px-2.5 py-1 rounded-lg bg-slate-900/80 text-slate-200 text-xs opacity-0 group-hover:opacity-100 transition-opacity backdrop-blur-sm border border-slate-700"
-          >
-            Đổi ảnh
-          </button>
+          <div className="absolute bottom-2 left-2 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button
+              type="button"
+              onClick={() => setCropperOpen(true)}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-brand-500/90 text-white text-xs font-medium backdrop-blur-sm border border-brand-400/30 hover:bg-brand-600 transition-colors shadow-md"
+            >
+              <Crop size={13} /> Sửa & Cắt
+            </button>
+            <button
+              type="button"
+              onClick={() => inputRef.current?.click()}
+              className="px-2.5 py-1 rounded-lg bg-slate-900/80 text-slate-200 text-xs backdrop-blur-sm border border-slate-700 hover:bg-slate-800 transition-colors"
+            >
+              Đổi ảnh
+            </button>
+          </div>
         )}
         <input
           ref={inputRef}
@@ -101,6 +112,18 @@ export function ImageUpload({
         />
       </div>
       {error && <p className="text-xs text-rose-400 mt-1">{error}</p>}
+
+      {value && (
+        <ImageCropperModal
+          open={cropperOpen}
+          onClose={() => setCropperOpen(false)}
+          imageUrl={value}
+          onSave={(newUrl) => onChange(newUrl)}
+          folder={folder}
+          customCode={customCode}
+          oldUrl={oldUrl || value}
+        />
+      )}
     </div>
   );
 }

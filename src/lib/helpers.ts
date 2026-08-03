@@ -13,8 +13,8 @@ function fileToDataUrl(file: File): Promise<string> {
 
 export async function compressImageForPreview(
   file: File,
-  maxWidth = 800,
-  quality = 0.82
+  maxWidth = 600,
+  quality = 0.70
 ): Promise<File> {
   if (!file.type.startsWith("image/") || file.type.includes("svg")) {
     return file;
@@ -77,9 +77,10 @@ export async function uploadFile(
   oldUrl?: string | null
 ): Promise<string | null> {
   try {
-    const originalFile = file;
-    // 1. Nén ảnh bằng Client Canvas trước khi lưu vào Supabase (WebP ~100KB)
-    const compressedFile = await compressImageForPreview(file, 800, 0.82);
+    const originalFile = file; // Giữ nguyên file GỐC độ phân giải HD chưa nén
+
+    // 1. Nén ảnh siêu nhẹ (WebP 600px, quality 0.70) dành riêng cho Supabase Storage để xem trước mượt mà
+    const compressedFile = await compressImageForPreview(file, 600, 0.70);
 
     let fileName = "";
     const sanitizedCode = customCode ? customCode.trim().replace(/[^a-zA-Z0-9_-]/g, "_").toUpperCase() : "";
@@ -87,13 +88,6 @@ export async function uploadFile(
     if (sanitizedCode) {
       const ext = compressedFile.name.split(".").pop() || "webp";
       fileName = `${folder}/${sanitizedCode}.${ext}`;
-
-      // Nếu có hình cũ và trùng tên, thực hiện di chuyển / archive file cũ trên Supabase
-      if (oldUrl && oldUrl.includes(fileName)) {
-        const nowStr = new Date().toISOString().replace(/[-:T.]/g, "").slice(0, 14);
-        const archiveName = `${folder}/archive/${sanitizedCode}_${nowStr}.${ext}`;
-        await supabase.storage.from("tshirt-assets").move(fileName, archiveName).catch(() => {});
-      }
     } else {
       const ext = compressedFile.name.split(".").pop() || "webp";
       fileName = `${folder}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
@@ -117,7 +111,7 @@ export async function uploadFile(
       console.info("Node.js Worker status (Cloudflare R2 & Google Drive sync):", (err as Error).message);
     });
 
-    if (publicUrl) return publicUrl;
+    if (publicUrl) return `${publicUrl}?t=${Date.now()}`;
 
     console.warn("Supabase Storage error, falling back to Data URL:", uploadError?.message);
     return await fileToDataUrl(compressedFile);
