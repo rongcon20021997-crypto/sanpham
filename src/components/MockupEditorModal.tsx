@@ -1,5 +1,6 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { Modal } from "@/components/Modal";
+import { ImageZoomModal } from "@/components/ImageZoomModal";
 import {
   Move,
   ZoomIn,
@@ -13,41 +14,94 @@ import {
   CornerUpLeft,
   Maximize2,
   Minimize2,
+  Eye,
+  EyeOff,
+  Layers,
+  ShieldCheck,
+  X,
 } from "lucide-react";
 import { uploadFile } from "@/lib/helpers";
+import type { PrintPositionData, LogoItem } from "@/lib/types";
 
-export interface MockupPositionData {
-  posX: number; // Tỷ lệ % từ lề trái (0 -> 100)
-  posY: number; // Tỷ lệ % từ lề trên (0 -> 100)
-  scale: number; // Tỷ lệ % kích thước so với khung áo (10 -> 100)
+export interface PrintDesignItem {
+  id: string;
+  code: string;
+  name: string;
+  url: string;
 }
 
 interface MockupEditorModalProps {
   open: boolean;
   onClose: () => void;
   blankImageUrl: string | null;
-  printDesignUrl: string | null;
+  blankImageBackUrl?: string | null;
+  printDesignUrl?: string | null; // Cho 1 hình in cũ
+  printDesigns?: PrintDesignItem[]; // Cho 1 đến 3 hình in mới
+  availableLogos?: LogoItem[]; // Danh sách Logo thương hiệu
   masterCode?: string;
-  initialPosition?: MockupPositionData;
-  onSaveMockup: (imageUrl: string, position: MockupPositionData) => Promise<void> | void;
+  initialPosition?: PrintPositionData;
+  initialPositions?: Record<string, PrintPositionData>;
+  initialImageType?: "front" | "combined" | string;
+  onSaveMockup: (
+    imageUrl: string,
+    position: PrintPositionData,
+    imageType: string,
+    positions?: Record<string, PrintPositionData>
+  ) => Promise<void> | void;
 }
 
 export function MockupEditorModal({
   open,
   onClose,
   blankImageUrl,
+  blankImageBackUrl,
   printDesignUrl,
+  printDesigns,
+  availableLogos = [],
   masterCode = "SP",
-  initialPosition = { posX: 50, posY: 38, scale: 45 },
+  initialPosition = { posX: 50, posY: 38, scale: 45, visible: true },
+  initialPositions,
+  initialImageType = "front",
   onSaveMockup,
 }: MockupEditorModalProps) {
-  const [posX, setPosX] = useState<number>(initialPosition?.posX ?? 50);
-  const [posY, setPosY] = useState<number>(initialPosition?.posY ?? 38);
-  const [scale, setScale] = useState<number>(initialPosition?.scale ?? 45);
+  const [imageType, setImageType] = useState<string>(initialImageType || "front");
+
+  // State quản lý tính năng ghép Logo tùy chọn
+  const [enableLogo, setEnableLogo] = useState<boolean>(false);
+  const [selectedLogoId, setSelectedLogoId] = useState<string>("");
+
+  // Tìm đối tượng Logo đang chọn
+  const selectedLogo = useMemo(() => {
+    return availableLogos.find((l) => l.id === selectedLogoId) || availableLogos[0] || null;
+  }, [availableLogos, selectedLogoId]);
+
+  // Quy chuẩn danh sách các hình in + Logo (nếu được bật)
+  const normalizedDesigns: PrintDesignItem[] = useMemo(() => {
+    let baseList: PrintDesignItem[] = [];
+    if (printDesigns && printDesigns.length > 0) {
+      baseList = [...printDesigns];
+    } else if (printDesignUrl) {
+      baseList = [{ id: "main", code: "PRINT", name: "Hình in chính", url: printDesignUrl }];
+    }
+
+    if (enableLogo && selectedLogo) {
+      baseList.push({
+        id: "logo",
+        code: selectedLogo.code,
+        name: `Logo: ${selectedLogo.name}`,
+        url: selectedLogo.image_url,
+      });
+    }
+
+    return baseList;
+  }, [printDesigns, printDesignUrl, enableLogo, selectedLogo]);
+
+  const [activeDesignId, setActiveDesignId] = useState<string>("");
+  const [designPositions, setDesignPositions] = useState<Record<string, PrintPositionData>>({});
 
   const [activeAction, setActiveAction] = useState<"move" | "resize" | null>(null);
 
-  // Dùng useRef để lưu vết kéo chuột liên tục 60 FPS mà KHÔNG bị stale state / reset state
+  // Dùng useRef để lưu vết kéo chuột liên tục 60 FPS mà KHÔNG bị stale state
   const actionTypeRef = useRef<"move" | "resize" | null>(null);
   const startPosRef = useRef({ x: 0, y: 0 });
   const startCenterRef = useRef({ x: 50, y: 38 });
@@ -55,64 +109,227 @@ export function MockupEditorModal({
 
   const [rendering, setRendering] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [zoomPreviewUrl, setZoomPreviewUrl] = useState<string | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Load initial position when opening Modal or when initialPosition changes
+  // Ảnh phôi nền hiện tại đang được chọn (Hình 1: Mặt trước vs. Hình 2: Trước & sau)
+  const activeBlankImage =
+    imageType === "combined" && blankImageBackUrl
+      ? blankImageBackUrl
+      : blankImageUrl || blankImageBackUrl || null;
+
+  // Tạo ảnh canvas tức thì để xem phóng to HD
+  async function handleOpenZoomPreview() {
+    const targetBlankImage = activeBlankImage || blankImageUrl || blankImageBackUrl;
+    if (!targetBlankImage) return;
+
+    try {
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+
+      const imgBlank = new Image();
+      imgBlank.crossOrigin = "anonymous";
+      imgBlank.src = targetBlankImage;
+
+      await new Promise((resolve) => (imgBlank.onload = resolve));
+
+      canvas.width = 1200;
+      canvas.height = 1200;
+
+      if (ctx) {
+        ctx.drawImage(imgBlank, 0, 0, 1200, 1200);
+
+        for (const design of normalizedDesigns) {
+          const pos = designPositions[design.id] || {
+            posX: 50,
+            posY: 38,
+            scale: 45,
+            visible: true,
+          };
+          if (pos.visible === false) continue;
+
+          const imgDesign = new Image();
+          imgDesign.crossOrigin = "anonymous";
+          imgDesign.src = design.url;
+          await new Promise((resolve) => (imgDesign.onload = resolve));
+
+          const designWidth = (pos.scale / 100) * 1200;
+          const designAspect = imgDesign.height / imgDesign.width;
+          const designHeight = designWidth * designAspect;
+
+          const drawX = (pos.posX / 100) * 1200 - designWidth / 2;
+          const drawY = (pos.posY / 100) * 1200 - designHeight / 2;
+
+          ctx.drawImage(imgDesign, drawX, drawY, designWidth, designHeight);
+        }
+      }
+
+      const dataUrl = canvas.toDataURL("image/png");
+      setZoomPreviewUrl(dataUrl);
+    } catch (err) {
+      setZoomPreviewUrl(targetBlankImage);
+    }
+  }
+
+  // Load initial position, positions map & image type when opening Modal
   useEffect(() => {
     if (open) {
-      const defaultX = initialPosition?.posX ?? 50;
-      const defaultY = initialPosition?.posY ?? 38;
-      const defaultS = initialPosition?.scale ?? 45;
-      setPosX(defaultX);
-      setPosY(defaultY);
-      setScale(defaultS);
+      const type = initialImageType || (blankImageUrl ? "front" : "combined");
+      setImageType(type);
+
+      const posMap: Record<string, PrintPositionData> = {};
+
+      // Kiểm tra xem đã từng bật ghép Logo trước đó chưa
+      if (initialPositions && initialPositions["logo"] && initialPositions["logo"].visible !== false) {
+        setEnableLogo(true);
+        if (availableLogos.length > 0) {
+          setSelectedLogoId(availableLogos[0].id);
+        }
+      } else {
+        setEnableLogo(false);
+        if (availableLogos.length > 0) {
+          setSelectedLogoId(availableLogos[0].id);
+        }
+      }
+
+      normalizedDesigns.forEach((d, idx) => {
+        if (initialPositions && initialPositions[d.id]) {
+          posMap[d.id] = { ...initialPositions[d.id] };
+        } else if (idx === 0 && initialPosition) {
+          posMap[d.id] = { ...initialPosition };
+        } else if (d.id === "logo") {
+          // Vị trí ngực trái mặc định cho Logo
+          posMap[d.id] = { posX: 38, posY: 28, scale: 16, visible: true };
+        } else {
+          // Vị trí mặc định thông minh cho các hình in tiếp theo
+          const defaultX = type === "combined" ? (idx === 1 ? 72 : 28) : idx === 1 ? 38 : 50;
+          const defaultY = idx === 2 ? 65 : 38;
+          const defaultS = type === "combined" ? 35 : idx === 1 ? 25 : 45;
+          posMap[d.id] = { posX: defaultX, posY: defaultY, scale: defaultS, visible: true };
+        }
+      });
+
+      const firstId = normalizedDesigns[0]?.id || "main";
+      setActiveDesignId(firstId);
+
+      setDesignPositions(posMap);
       setSavedSuccess(false);
       actionTypeRef.current = null;
       setActiveAction(null);
     }
-  }, [open, initialPosition]);
+  }, [open, initialPosition, initialPositions, initialImageType, blankImageUrl]);
 
-  // Các Preset cài đặt sẵn vị trí nhanh
-  const presets = [
-    { label: "Ngực Trái", icon: CornerUpLeft, x: 38, y: 30, s: 22 },
+  // Thông số của Layer đang được chọn (Active Design hoặc Active Logo)
+  const currentPos = useMemo(() => {
+    return (
+      designPositions[activeDesignId] || {
+        posX: 50,
+        posY: 38,
+        scale: 45,
+        visible: true,
+      }
+    );
+  }, [designPositions, activeDesignId]);
+
+  const posX = currentPos.posX;
+  const posY = currentPos.posY;
+  const scale = currentPos.scale;
+
+  // Cập nhật vị trí cho layer đang active
+  function updateActivePos(updates: Partial<PrintPositionData>) {
+    if (!activeDesignId) return;
+    setDesignPositions((prev) => ({
+      ...prev,
+      [activeDesignId]: {
+        ...(prev[activeDesignId] || { posX: 50, posY: 38, scale: 45, visible: true }),
+        ...updates,
+      },
+    }));
+  }
+
+  // Nút Ẩn / Hiện (Bật / Tắt) cho hình in hoặc logo chỉ định
+  function toggleVisibility(id: string) {
+    setDesignPositions((prev) => {
+      const current = prev[id] || { posX: 50, posY: 38, scale: 45, visible: true };
+      const nextVisible = current.visible === false ? true : false;
+      return {
+        ...prev,
+        [id]: {
+          ...current,
+          visible: nextVisible,
+        },
+      };
+    });
+  }
+
+  // Chuyển đổi giữa Chế độ Hình 1 (Mặt trước) và Hình 2 (Trước & Sau)
+  function handleToggleImageType(newType: "front" | "combined") {
+    setImageType(newType);
+    if (!activeDesignId) return;
+
+    if (newType === "combined") {
+      updateActivePos({ posX: 28, posY: 38, scale: 35 });
+    } else {
+      updateActivePos({ posX: 50, posY: 38, scale: 45 });
+    }
+  }
+
+  // Các Preset vị trí phù hợp với từng chế độ hình phôi
+  const presetsFront = [
     { label: "Giữa Ngực Vừa", icon: AlignCenter, x: 50, y: 38, s: 45 },
+    { label: "Ngực Trái", icon: CornerUpLeft, x: 38, y: 30, s: 22 },
     { label: "Giữa Ngực To", icon: Maximize2, x: 50, y: 42, s: 65 },
     { label: "Sát Cổ Áo", icon: Minimize2, x: 50, y: 22, s: 30 },
   ];
 
-  // Bắt đầu Di Chuyển Hình In (MouseDown trên hình)
-  function handleStartMove(e: React.MouseEvent | React.TouchEvent) {
+  const presetsCombined = [
+    { label: "Áo Trái (Mặt trước)", icon: AlignCenter, x: 28, y: 38, s: 35 },
+    { label: "Áo Phải (Mặt sau)", icon: AlignCenter, x: 72, y: 38, s: 35 },
+    { label: "Ngực Trái Áo Trái", icon: CornerUpLeft, x: 21, y: 30, s: 18 },
+    { label: "Sát Cổ Áo Trái", icon: Minimize2, x: 28, y: 22, s: 22 },
+  ];
+
+  const presets = imageType === "combined" ? presetsCombined : presetsFront;
+
+  // Bắt đầu Di Chuyển Layer (MouseDown trên hình)
+  function handleStartMove(e: React.MouseEvent | React.TouchEvent, designId: string) {
     e.preventDefault();
     e.stopPropagation();
+    setActiveDesignId(designId);
     actionTypeRef.current = "move";
     setActiveAction("move");
 
     const clientX = "touches" in e ? e.touches[0].clientX : (e as React.MouseEvent).clientX;
     const clientY = "touches" in e ? e.touches[0].clientY : (e as React.MouseEvent).clientY;
 
+    const pos = designPositions[designId] || { posX: 50, posY: 38, scale: 45, visible: true };
+
     startPosRef.current = { x: clientX, y: clientY };
-    startCenterRef.current = { x: posX, y: posY };
+    startCenterRef.current = { x: pos.posX, y: pos.posY };
   }
 
   // Bắt đầu Thu Phóng Kích Thước (MouseDown trên 4 nút góc)
-  function handleStartResize(e: React.MouseEvent | React.TouchEvent) {
+  function handleStartResize(e: React.MouseEvent | React.TouchEvent, designId: string) {
     e.preventDefault();
     e.stopPropagation();
+    setActiveDesignId(designId);
     actionTypeRef.current = "resize";
     setActiveAction("resize");
 
     const clientX = "touches" in e ? e.touches[0].clientX : (e as React.MouseEvent).clientX;
     const clientY = "touches" in e ? e.touches[0].clientY : (e as React.MouseEvent).clientY;
 
+    const pos = designPositions[designId] || { posX: 50, posY: 38, scale: 45, visible: true };
+
     startPosRef.current = { x: clientX, y: clientY };
-    startScaleRef.current = scale;
+    startScaleRef.current = pos.scale;
   }
 
   // Đăng ký sự kiện Kéo Thả toàn cục (Global Event Listener) cho mượt 60 FPS
   useEffect(() => {
     function handleGlobalMove(e: MouseEvent | TouchEvent) {
-      if (!actionTypeRef.current || !containerRef.current) return;
+      if (!actionTypeRef.current || !containerRef.current || !activeDesignId) return;
       const clientX = "touches" in e ? e.touches[0].clientX : (e as MouseEvent).clientX;
       const clientY = "touches" in e ? e.touches[0].clientY : (e as MouseEvent).clientY;
       const rect = containerRef.current.getBoundingClientRect();
@@ -121,14 +338,31 @@ export function MockupEditorModal({
         const deltaX = ((clientX - startPosRef.current.x) / rect.width) * 100;
         const deltaY = ((clientY - startPosRef.current.y) / rect.height) * 100;
 
-        setPosX(Math.max(5, Math.min(95, startCenterRef.current.x + deltaX)));
-        setPosY(Math.max(5, Math.min(95, startCenterRef.current.y + deltaY)));
+        const newX = Math.max(5, Math.min(95, startCenterRef.current.x + deltaX));
+        const newY = Math.max(5, Math.min(95, startCenterRef.current.y + deltaY));
+
+        setDesignPositions((prev) => ({
+          ...prev,
+          [activeDesignId]: {
+            ...(prev[activeDesignId] || { posX: 50, posY: 38, scale: 45, visible: true }),
+            posX: newX,
+            posY: newY,
+          },
+        }));
       } else if (actionTypeRef.current === "resize") {
         const deltaX = ((clientX - startPosRef.current.x) / rect.width) * 100;
         const deltaY = ((clientY - startPosRef.current.y) / rect.height) * 100;
         const deltaScale = (deltaX + deltaY) / 1.5;
 
-        setScale(Math.max(10, Math.min(90, startScaleRef.current + deltaScale)));
+        const newScale = Math.max(5, Math.min(90, startScaleRef.current + deltaScale));
+
+        setDesignPositions((prev) => ({
+          ...prev,
+          [activeDesignId]: {
+            ...(prev[activeDesignId] || { posX: 50, posY: 38, scale: 45, visible: true }),
+            scale: newScale,
+          },
+        }));
       }
     }
 
@@ -150,18 +384,20 @@ export function MockupEditorModal({
       window.removeEventListener("touchmove", handleGlobalMove);
       window.removeEventListener("touchend", handleGlobalEnd);
     };
-  }, []);
+  }, [activeDesignId]);
 
   // Thu phóng bằng con trỏ chuột (Mouse Wheel Zoom)
   function handleWheel(e: React.WheelEvent) {
     e.preventDefault();
+    if (!activeDesignId) return;
     const zoomDelta = e.deltaY < 0 ? 3 : -3;
-    setScale((prev) => Math.max(10, Math.min(90, prev + zoomDelta)));
+    updateActivePos({ scale: Math.max(5, Math.min(90, scale + zoomDelta)) });
   }
 
-  // Ghép ảnh thật bằng Canvas và Xuất ảnh Mockup
+  // Ghép đa lớp tất cả các hình in & Logo đang BẬT (Visible) bằng Canvas và Xuất ảnh Mockup
   async function handleExportAndSave() {
-    if (!blankImageUrl || !printDesignUrl) {
+    const targetBlankImage = activeBlankImage || blankImageUrl || blankImageBackUrl;
+    if (!targetBlankImage || normalizedDesigns.length === 0) {
       alert("Thiếu ảnh phôi hoặc ảnh hình in để tạo mockup.");
       return;
     }
@@ -173,33 +409,41 @@ export function MockupEditorModal({
 
       const imgBlank = new Image();
       imgBlank.crossOrigin = "anonymous";
-      imgBlank.src = blankImageUrl;
+      imgBlank.src = targetBlankImage;
 
-      const imgDesign = new Image();
-      imgDesign.crossOrigin = "anonymous";
-      imgDesign.src = printDesignUrl;
-
-      await Promise.all([
-        new Promise((resolve) => (imgBlank.onload = resolve)),
-        new Promise((resolve) => (imgDesign.onload = resolve)),
-      ]);
+      await new Promise((resolve) => (imgBlank.onload = resolve));
 
       canvas.width = 1200;
       canvas.height = 1200;
 
       if (ctx) {
-        // 1. Vẽ Phôi Áo
+        // 1. Vẽ Phôi Áo Nền
         ctx.drawImage(imgBlank, 0, 0, 1200, 1200);
 
-        // 2. Tính toán vị trí & kích thước Hình In dựa theo % posX, posY, scale
-        const designWidth = (scale / 100) * 1200;
-        const designAspect = imgDesign.height / imgDesign.width;
-        const designHeight = designWidth * designAspect;
+        // 2. Lần lượt vẽ từng Hình In & Logo đang ở trạng thái HIỆN (Visible) lên Canvas
+        for (const design of normalizedDesigns) {
+          const pos = designPositions[design.id] || {
+            posX: 50,
+            posY: 38,
+            scale: 45,
+            visible: true,
+          };
+          if (pos.visible === false) continue; // Bỏ qua không vẽ những layer bị ẨN
 
-        const drawX = (posX / 100) * 1200 - designWidth / 2;
-        const drawY = (posY / 100) * 1200 - designHeight / 2;
+          const imgDesign = new Image();
+          imgDesign.crossOrigin = "anonymous";
+          imgDesign.src = design.url;
+          await new Promise((resolve) => (imgDesign.onload = resolve));
 
-        ctx.drawImage(imgDesign, drawX, drawY, designWidth, designHeight);
+          const designWidth = (pos.scale / 100) * 1200;
+          const designAspect = imgDesign.height / imgDesign.width;
+          const designHeight = designWidth * designAspect;
+
+          const drawX = (pos.posX / 100) * 1200 - designWidth / 2;
+          const drawY = (pos.posY / 100) * 1200 - designHeight / 2;
+
+          ctx.drawImage(imgDesign, drawX, drawY, designWidth, designHeight);
+        }
       }
 
       // Convert Canvas sang WebP Blob
@@ -218,14 +462,22 @@ export function MockupEditorModal({
         // Gửi thông số vị trí sang Node.js Server (renderimage) ghép file HD 300DPI
         notifyNodeJsRenderServer({
           masterCode,
-          blankImageUrl,
-          printDesignUrl,
+          blankImageUrl: targetBlankImage,
+          printDesigns: normalizedDesigns.map((d) => ({
+            id: d.id,
+            url: d.url,
+            position: designPositions[d.id],
+          })),
+          imageType,
+        }).catch(() => {});
+
+        const primaryPos = designPositions[normalizedDesigns[0]?.id || "main"] || {
           posX,
           posY,
           scale,
-        }).catch(() => {});
+        };
 
-        await onSaveMockup(uploadedUrl, { posX, posY, scale });
+        await onSaveMockup(uploadedUrl, primaryPos, imageType, designPositions);
         setSavedSuccess(true);
         setTimeout(() => {
           setSavedSuccess(false);
@@ -250,208 +502,428 @@ export function MockupEditorModal({
   }
 
   return (
-    <Modal open={open} onClose={onClose} title={`Kéo Thả & Co Giãn Hình In (${masterCode})`} size="lg">
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-4 sm:gap-5 select-none">
-        {/* VÙNG KHUNG XEM TRƯỚC VÀ KÉO THẢ (Interactive Workspace) */}
-        <div className="md:col-span-3 space-y-2.5">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] sm:text-xs text-slate-400 flex items-center gap-1">
-              <Move size={13} className="text-brand-400" /> Kéo chuột di chuyển hoặc kéo 4 góc để co giãn
-            </span>
-            <span className="text-[11px] sm:text-xs font-mono text-brand-400 font-bold">
-              X:{Math.round(posX)}% Y:{Math.round(posY)}% S:{Math.round(scale)}%
-            </span>
-          </div>
-
-          <div
-            ref={containerRef}
-            onWheel={handleWheel}
-            className="relative aspect-square w-full max-w-[360px] sm:max-w-[400px] mx-auto rounded-2xl bg-slate-900 border-2 border-slate-700/80 overflow-hidden flex items-center justify-center shadow-xl touch-none"
-          >
-            {/* Ảnh Phôi Nền */}
-            {blankImageUrl ? (
-              <img src={blankImageUrl} alt="Blank" className="w-full h-full object-contain pointer-events-none" />
-            ) : (
-              <Package size={48} className="text-slate-700" />
-            )}
-
-            {/* KHUNG HÌNH IN CÓ THỂ KÉO THẢ & CO GIÃN BẰNG NÚT 4 GÓC */}
-            {printDesignUrl ? (
-              <div
-                style={{
-                  top: `${posY}%`,
-                  left: `${posX}%`,
-                  width: `${scale}%`,
-                  transform: "translate(-50%, -50%)",
-                }}
-                className={`absolute group cursor-move ${
-                  activeAction ? "ring-2 ring-brand-400 ring-offset-2 ring-offset-slate-950" : "hover:ring-2 hover:ring-brand-400/80"
-                } rounded-lg p-1.5 transition-all`}
-                onMouseDown={handleStartMove}
-                onTouchStart={handleStartMove}
-              >
-                {/* Ảnh Hình In */}
-                <img
-                  src={printDesignUrl}
-                  alt="Design"
-                  className="w-full h-auto object-contain pointer-events-none drop-shadow-2xl"
-                />
-
-                {/* Khung Viền Nét Đứt */}
-                <div className="absolute inset-0 border-2 border-dashed border-brand-400/90 rounded-lg pointer-events-none" />
-
-                {/* 🔴 4 NÚT VUÔNG BỐN GÓC ĐỂ NẮM CHUỘT KÉO CO GIÃN TRỰC TIẾP */}
-                {/* Góc Trên-Trái */}
-                <div
-                  onMouseDown={handleStartResize}
-                  onTouchStart={handleStartResize}
-                  className="absolute -top-2 -left-2 w-4 h-4 bg-brand-400 border-2 border-white rounded-full cursor-nwse-resize shadow-md hover:scale-125 transition-transform"
-                  title="Kéo để thu phóng kích thước"
-                />
-                {/* Góc Trên-Phải */}
-                <div
-                  onMouseDown={handleStartResize}
-                  onTouchStart={handleStartResize}
-                  className="absolute -top-2 -right-2 w-4 h-4 bg-brand-400 border-2 border-white rounded-full cursor-nesw-resize shadow-md hover:scale-125 transition-transform"
-                  title="Kéo để thu phóng kích thước"
-                />
-                {/* Góc Dưới-Trái */}
-                <div
-                  onMouseDown={handleStartResize}
-                  onTouchStart={handleStartResize}
-                  className="absolute -bottom-2 -left-2 w-4 h-4 bg-brand-400 border-2 border-white rounded-full cursor-nesw-resize shadow-md hover:scale-125 transition-transform"
-                  title="Kéo để thu phóng kích thước"
-                />
-                {/* Góc Dưới-Phải */}
-                <div
-                  onMouseDown={handleStartResize}
-                  onTouchStart={handleStartResize}
-                  className="absolute -bottom-2 -right-2 w-4 h-4 bg-brand-400 border-2 border-white rounded-full cursor-nwse-resize shadow-md hover:scale-125 transition-transform"
-                  title="Kéo để thu phóng kích thước"
-                />
-              </div>
-            ) : (
-              <ImageIcon size={48} className="text-slate-700" />
-            )}
+    <Modal open={open} onClose={onClose} title={`Kéo Thả & Co Giãn Vị Trí (${masterCode})`} size="lg">
+      <div className="space-y-3">
+        {/* Nút chuyển đổi chọn Chế độ Hình Phôi (Hình 1 vs. Hình 2) */}
+        <div className="flex items-center justify-between bg-slate-950 p-2 rounded-xl border border-slate-800 flex-wrap gap-2">
+          <span className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+            <ImageIcon size={15} className="text-brand-400" /> Chọn loại hình phôi làm Mockup:
+          </span>
+          <div className="flex bg-slate-800 p-1 rounded-lg border border-slate-700">
+            <button
+              type="button"
+              onClick={() => handleToggleImageType("front")}
+              disabled={!blankImageUrl && !blankImageBackUrl}
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition-colors ${
+                imageType === "front"
+                  ? "bg-brand-500 text-white shadow-sm font-semibold"
+                  : "text-slate-400 hover:text-slate-200"
+              }`}
+            >
+              <span>👕 Hình 1: 1 Áo phía trước</span>
+              {!blankImageUrl && <span className="text-[10px] text-amber-400">(Chưa tải)</span>}
+            </button>
+            <button
+              type="button"
+              onClick={() => handleToggleImageType("combined")}
+              disabled={!blankImageUrl && !blankImageBackUrl}
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition-colors ${
+                imageType === "combined"
+                  ? "bg-brand-500 text-white shadow-sm font-semibold"
+                  : "text-slate-400 hover:text-slate-200"
+              }`}
+            >
+              <span>👕👕 Hình 2: Trước & sau của áo</span>
+              {!blankImageBackUrl && <span className="text-[10px] text-amber-400">(Chưa tải)</span>}
+            </button>
           </div>
         </div>
 
-        {/* BẢNG ĐIỀU CHỈNH THÔNG SỐ & NÚT LƯU */}
-        <div className="md:col-span-2 space-y-4 flex flex-col justify-between">
-          <div className="space-y-4">
-            <h4 className="text-sm font-semibold text-slate-200 border-b border-slate-800 pb-2">
-              📍 Căn chỉnh vị trí nhanh (Presets)
-            </h4>
+        {/* THẺ TÙY CHỌN GHÉP LOGO THƯƠNG HIỆU LÊN ÁO */}
+        {availableLogos && availableLogos.length > 0 && (
+          <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 space-y-2">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <span className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                <ShieldCheck size={15} className="text-emerald-400" /> Ghép Logo thương hiệu lên áo?
+              </span>
 
-            <div className="grid grid-cols-2 gap-2">
-              {presets.map((p) => {
-                const Icon = p.icon;
-                return (
-                  <button
-                    key={p.label}
-                    type="button"
-                    onClick={() => {
-                      setPosX(p.x);
-                      setPosY(p.y);
-                      setScale(p.s);
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const nextState = !enableLogo;
+                    setEnableLogo(nextState);
+                    if (nextState) {
+                      if (!selectedLogoId && availableLogos.length > 0) {
+                        setSelectedLogoId(availableLogos[0].id);
+                      }
+                      setDesignPositions((prev) => ({
+                        ...prev,
+                        logo: prev["logo"] || { posX: 38, posY: 28, scale: 16, visible: true },
+                      }));
+                      setActiveDesignId("logo");
+                    }
+                  }}
+                  className={`px-3 py-1 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 ${
+                    enableLogo
+                      ? "bg-emerald-500 text-white shadow-sm font-bold"
+                      : "bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-700"
+                  }`}
+                >
+                  {enableLogo ? (
+                    <>
+                      <Check size={13} /> Có ghép Logo
+                    </>
+                  ) : (
+                    <>
+                      <X size={13} /> Không ghép Logo
+                    </>
+                  )}
+                </button>
+
+                {enableLogo && (
+                  <select
+                    value={selectedLogoId}
+                    onChange={(e) => {
+                      setSelectedLogoId(e.target.value);
+                      setActiveDesignId("logo");
                     }}
-                    className="flex items-center gap-2 p-2.5 rounded-xl border border-slate-700/60 bg-slate-800/40 hover:bg-brand-500/10 hover:border-brand-500/40 hover:text-brand-400 text-slate-300 text-xs font-medium transition-all"
+                    className="px-2.5 py-1 rounded-lg border border-slate-700 bg-slate-900 text-slate-100 text-xs outline-none focus:border-emerald-500"
                   >
-                    <Icon size={14} className="text-brand-400 shrink-0" />
-                    <span>{p.label}</span>
-                  </button>
+                    {availableLogos.map((l) => (
+                      <option key={l.id} value={l.id}>
+                        {l.code} — {l.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* NÚT CHỌN TAB & BẬT/TẮT 👁️ (ẨN/HIỆN) TỪNG HÌNH IN & LOGO */}
+        {normalizedDesigns.length > 0 && (
+          <div className="p-2 rounded-xl bg-slate-950/80 border border-slate-800 space-y-1.5">
+            <span className="text-[11px] font-semibold text-slate-300 flex items-center gap-1.5">
+              <Layers size={14} className="text-brand-400" /> Danh sách Layers ({normalizedDesigns.length} layer) — Bấm 👁️ để Ẩn / Hiện:
+            </span>
+            <div className="flex flex-wrap gap-2">
+              {normalizedDesigns.map((d, idx) => {
+                const pos = designPositions[d.id] || { posX: 50, posY: 38, scale: 45, visible: true };
+                const isVisible = pos.visible !== false;
+                const isSelected = d.id === activeDesignId;
+                const isLogoLayer = d.id === "logo";
+
+                return (
+                  <div
+                    key={d.id}
+                    className={`flex items-center rounded-xl border text-xs overflow-hidden transition-all ${
+                      isSelected
+                        ? isLogoLayer
+                          ? "bg-emerald-500/20 border-emerald-500/50 shadow-sm"
+                          : "bg-brand-500/20 border-brand-500/50 shadow-sm"
+                        : "bg-slate-900 border-slate-700/60"
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setActiveDesignId(d.id)}
+                      className={`px-3 py-1.5 flex items-center gap-1.5 font-medium ${
+                        isSelected
+                          ? isLogoLayer
+                            ? "text-emerald-300 font-bold"
+                            : "text-brand-300 font-bold"
+                          : "text-slate-300 hover:text-slate-100"
+                      }`}
+                    >
+                      <img src={d.url} alt="" className="w-4 h-4 object-contain rounded bg-slate-950 p-0.5" />
+                      <span>{isLogoLayer ? d.name : `Hình in ${idx + 1}: ${d.name}`}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => toggleVisibility(d.id)}
+                      className={`px-2.5 py-1.5 border-l hover:bg-slate-800 transition-colors flex items-center gap-1 ${
+                        isVisible
+                          ? "text-emerald-400 border-slate-800 bg-emerald-500/10"
+                          : "text-rose-400 border-slate-800 bg-rose-500/10"
+                      }`}
+                      title={isVisible ? "Đang HIỆN - Bấm để ẨN layer này" : "Đang ẨN - Bấm để HIỆN layer này"}
+                    >
+                      {isVisible ? (
+                        <>
+                          <Eye size={13} /> <span className="text-[10px]">Hiện</span>
+                        </>
+                      ) : (
+                        <>
+                          <EyeOff size={13} /> <span className="text-[10px]">Ẩn</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
                 );
               })}
             </div>
+          </div>
+        )}
 
-            <div className="space-y-3 pt-2">
-              <h4 className="text-sm font-semibold text-slate-200 border-b border-slate-800 pb-2">
-                📏 Điều chỉnh kích thước & vị trí
-              </h4>
-
-              {/* Thanh trượt Co Giãn (Scale) */}
-              <div className="space-y-1.5">
-                <div className="flex justify-between text-xs text-slate-300">
-                  <span className="flex items-center gap-1">
-                    <ZoomIn size={13} className="text-brand-400" /> Co giãn (Scale):
-                  </span>
-                  <span className="font-mono text-brand-400 font-bold">{Math.round(scale)}%</span>
-                </div>
-                <input
-                  type="range"
-                  min="10"
-                  max="90"
-                  value={scale}
-                  onChange={(e) => setScale(Number(e.target.value))}
-                  className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-brand-500"
-                />
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-4 sm:gap-5 select-none">
+          {/* VÙNG KHUNG XEM TRƯỚC VÀ KÉO THẢ ĐA LỚP (Interactive Workspace) */}
+          <div className="md:col-span-3 space-y-2.5">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <span className="text-[11px] sm:text-xs text-slate-400 flex items-center gap-1">
+                <Move size={13} className="text-brand-400" /> Kéo chuột di chuyển hoặc kéo 4 góc để co giãn
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleOpenZoomPreview}
+                  className="px-2.5 py-1 rounded-lg bg-brand-500/10 hover:bg-brand-500/20 text-brand-400 border border-brand-500/30 text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-sm"
+                  title="Tạo ảnh xem trước HD và soi phóng to chi tiết"
+                >
+                  <Eye size={13} /> 🔍 Phóng to HD
+                </button>
+                <span className="text-[11px] sm:text-xs font-mono text-brand-400 font-bold">
+                  X:{Math.round(posX)}% Y:{Math.round(posY)}% S:{Math.round(scale)}%
+                </span>
               </div>
+            </div>
 
-              {/* Thanh trượt Vị trí Dọc (PosY) */}
-              <div className="space-y-1.5">
-                <div className="flex justify-between text-xs text-slate-300">
-                  <span>↕️ Vị trí Dọc (Y):</span>
-                  <span className="font-mono text-slate-400 font-semibold">{Math.round(posY)}%</span>
-                </div>
-                <input
-                  type="range"
-                  min="10"
-                  max="90"
-                  value={posY}
-                  onChange={(e) => setPosY(Number(e.target.value))}
-                  className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-brand-500"
-                />
-              </div>
+            <div
+              ref={containerRef}
+              onWheel={handleWheel}
+              className="relative aspect-square w-full max-w-[360px] sm:max-w-[400px] mx-auto rounded-2xl bg-slate-900 border-2 border-slate-700/80 overflow-hidden flex items-center justify-center shadow-xl touch-none"
+            >
+              {/* Ảnh Phôi Nền */}
+              {activeBlankImage ? (
+                <img src={activeBlankImage} alt="Blank" className="w-full h-full object-contain pointer-events-none" />
+              ) : (
+                <Package size={48} className="text-slate-700" />
+              )}
 
-              {/* Thanh trượt Vị trí Ngang (PosX) */}
-              <div className="space-y-1.5">
-                <div className="flex justify-between text-xs text-slate-300">
-                  <span>↔️ Vị trí Ngang (X):</span>
-                  <span className="font-mono text-slate-400 font-semibold">{Math.round(posX)}%</span>
-                </div>
-                <input
-                  type="range"
-                  min="10"
-                  max="90"
-                  value={posX}
-                  onChange={(e) => setPosX(Number(e.target.value))}
-                  className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-brand-500"
-                />
-              </div>
+              {/* KHUNG CÁC HÌNH IN & LOGO ĐA LỚP (Hiển thị các layer đang BẬT) */}
+              {normalizedDesigns.map((d, idx) => {
+                const pos = designPositions[d.id] || { posX: 50, posY: 38, scale: 45, visible: true };
+                if (pos.visible === false) return null; // Ẩn layer này nếu nút 👁️ đang tắt
+
+                const isSelected = d.id === activeDesignId;
+                const isLogoLayer = d.id === "logo";
+
+                return (
+                  <div
+                    key={d.id}
+                    style={{
+                      top: `${pos.posY}%`,
+                      left: `${pos.posX}%`,
+                      width: `${pos.scale}%`,
+                      transform: "translate(-50%, -50%)",
+                      zIndex: isSelected ? 30 : 10 + idx,
+                    }}
+                    className={`absolute group cursor-move ${
+                      isSelected
+                        ? isLogoLayer
+                          ? "ring-2 ring-emerald-400 ring-offset-2 ring-offset-slate-950"
+                          : "ring-2 ring-brand-400 ring-offset-2 ring-offset-slate-950"
+                        : "hover:ring-2 hover:ring-brand-400/60 opacity-90 hover:opacity-100"
+                    } rounded-lg p-1.5 transition-all`}
+                    onMouseDown={(e) => handleStartMove(e, d.id)}
+                    onTouchStart={(e) => handleStartMove(e, d.id)}
+                  >
+                    {/* Ảnh Layer (Hình in hoặc Logo) */}
+                    <img
+                      src={d.url}
+                      alt={d.name}
+                      className="w-full h-auto object-contain pointer-events-none drop-shadow-2xl"
+                    />
+
+                    {/* Tag tên layer */}
+                    <span
+                      className={`absolute -top-5 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded text-[9px] font-medium pointer-events-none whitespace-nowrap border ${
+                        isLogoLayer
+                          ? "bg-emerald-950/90 text-emerald-300 border-emerald-500/40"
+                          : "bg-black/80 text-brand-300 border-brand-500/30"
+                      }`}
+                    >
+                      {d.name}
+                    </span>
+
+                    {isSelected && (
+                      <>
+                        {/* Khung Viền Nét Đứt */}
+                        <div
+                          className={`absolute inset-0 border-2 border-dashed ${
+                            isLogoLayer ? "border-emerald-400/90" : "border-brand-400/90"
+                          } rounded-lg pointer-events-none`}
+                        />
+
+                        {/* 4 Nút Vuông Co Giãn */}
+                        <div
+                          onMouseDown={(e) => handleStartResize(e, d.id)}
+                          onTouchStart={(e) => handleStartResize(e, d.id)}
+                          className={`absolute -top-2 -left-2 w-4 h-4 ${
+                            isLogoLayer ? "bg-emerald-400" : "bg-brand-400"
+                          } border-2 border-white rounded-full cursor-nwse-resize shadow-md hover:scale-125 transition-transform`}
+                          title="Kéo để thu phóng kích thước"
+                        />
+                        <div
+                          onMouseDown={(e) => handleStartResize(e, d.id)}
+                          onTouchStart={(e) => handleStartResize(e, d.id)}
+                          className={`absolute -top-2 -right-2 w-4 h-4 ${
+                            isLogoLayer ? "bg-emerald-400" : "bg-brand-400"
+                          } border-2 border-white rounded-full cursor-nesw-resize shadow-md hover:scale-125 transition-transform`}
+                          title="Kéo để thu phóng kích thước"
+                        />
+                        <div
+                          onMouseDown={(e) => handleStartResize(e, d.id)}
+                          onTouchStart={(e) => handleStartResize(e, d.id)}
+                          className={`absolute -bottom-2 -left-2 w-4 h-4 ${
+                            isLogoLayer ? "bg-emerald-400" : "bg-brand-400"
+                          } border-2 border-white rounded-full cursor-nesw-resize shadow-md hover:scale-125 transition-transform`}
+                          title="Kéo để thu phóng kích thước"
+                        />
+                        <div
+                          onMouseDown={(e) => handleStartResize(e, d.id)}
+                          onTouchStart={(e) => handleStartResize(e, d.id)}
+                          className={`absolute -bottom-2 -right-2 w-4 h-4 ${
+                            isLogoLayer ? "bg-emerald-400" : "bg-brand-400"
+                          } border-2 border-white rounded-full cursor-nwse-resize shadow-md hover:scale-125 transition-transform`}
+                          title="Kéo để thu phóng kích thước"
+                        />
+                      </>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
 
-          <div className="pt-4 border-t border-slate-800 space-y-2">
-            <button
-              type="button"
-              onClick={handleExportAndSave}
-              disabled={rendering}
-              className="w-full py-3 rounded-xl bg-brand-500 text-white text-sm font-semibold hover:bg-brand-600 transition-colors shadow-lg shadow-brand-500/20 flex items-center justify-center gap-2"
-            >
-              {savedSuccess ? (
-                <>
-                  <Check size={18} /> Đã lưu vị trí thành công!
-                </>
-              ) : rendering ? (
-                <>
-                  <Loader2 size={18} className="animate-spin" /> Đang render & tải mockup...
-                </>
-              ) : (
-                <>
-                  <Sparkles size={18} /> Lưu Vị Trí & Tạo Ảnh Mockup
-                </>
-              )}
-            </button>
-            <button
-              type="button"
-              onClick={onClose}
-              className="w-full py-2.5 rounded-xl border border-slate-700 text-slate-400 text-xs font-medium hover:bg-slate-800 transition-colors"
-            >
-              Hủy
-            </button>
+          {/* BẢNG ĐIỀU CHỈNH THÔNG SỐ & NÚT LƯU */}
+          <div className="md:col-span-2 space-y-4 flex flex-col justify-between">
+            <div className="space-y-4">
+              <h4 className="text-sm font-semibold text-slate-200 border-b border-slate-800 pb-2 flex items-center justify-between">
+                <span>📍 Căn vị trí nhanh (Presets)</span>
+                {activeDesignId && (
+                  <span className="text-xs font-normal text-brand-400 truncate max-w-[120px]">
+                    {normalizedDesigns.find((d) => d.id === activeDesignId)?.name}
+                  </span>
+                )}
+              </h4>
+
+              <div className="grid grid-cols-2 gap-2">
+                {presets.map((p) => {
+                  const Icon = p.icon;
+                  return (
+                    <button
+                      key={p.label}
+                      type="button"
+                      onClick={() => updateActivePos({ posX: p.x, posY: p.y, scale: p.s })}
+                      className="flex items-center gap-2 p-2.5 rounded-xl border border-slate-700/60 bg-slate-800/40 hover:bg-brand-500/10 hover:border-brand-500/40 hover:text-brand-400 text-slate-300 text-xs font-medium transition-all"
+                    >
+                      <Icon size={14} className="text-brand-400 shrink-0" />
+                      <span>{p.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="space-y-3 pt-2">
+                <h4 className="text-sm font-semibold text-slate-200 border-b border-slate-800 pb-2">
+                  📏 Điều chỉnh kích thước & vị trí
+                </h4>
+
+                {/* Thanh trượt Co Giãn (Scale) */}
+                <div className="space-y-1.5">
+                  <div className="flex justify-between text-xs text-slate-300">
+                    <span className="flex items-center gap-1">
+                      <ZoomIn size={13} className="text-brand-400" /> Co giãn (Scale):
+                    </span>
+                    <span className="font-mono text-brand-400 font-bold">{Math.round(scale)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="5"
+                    max="90"
+                    value={scale}
+                    onChange={(e) => updateActivePos({ scale: Number(e.target.value) })}
+                    className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-brand-500"
+                  />
+                </div>
+
+                {/* Thanh trượt Vị trí Dọc (PosY) */}
+                <div className="space-y-1.5">
+                  <div className="flex justify-between text-xs text-slate-300">
+                    <span>↕️ Vị trí Dọc (Y):</span>
+                    <span className="font-mono text-slate-400 font-semibold">{Math.round(posY)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="5"
+                    max="95"
+                    value={posY}
+                    onChange={(e) => updateActivePos({ posY: Number(e.target.value) })}
+                    className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-brand-500"
+                  />
+                </div>
+
+                {/* Thanh trượt Vị trí Ngang (PosX) */}
+                <div className="space-y-1.5">
+                  <div className="flex justify-between text-xs text-slate-300">
+                    <span>↔️ Vị trí Ngang (X):</span>
+                    <span className="font-mono text-slate-400 font-semibold">{Math.round(posX)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="5"
+                    max="95"
+                    value={posX}
+                    onChange={(e) => updateActivePos({ posX: Number(e.target.value) })}
+                    className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-brand-500"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="pt-4 border-t border-slate-800 space-y-2">
+              <button
+                type="button"
+                onClick={handleExportAndSave}
+                disabled={rendering}
+                className="w-full py-3 rounded-xl bg-brand-500 text-white text-sm font-semibold hover:bg-brand-600 transition-colors shadow-lg shadow-brand-500/20 flex items-center justify-center gap-2"
+              >
+                {savedSuccess ? (
+                  <>
+                    <Check size={18} /> Đã lưu vị trí thành công!
+                  </>
+                ) : rendering ? (
+                  <>
+                    <Loader2 size={18} className="animate-spin" /> Đang render & tải mockup...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles size={18} /> Lưu Vị Trí & Tạo Ảnh Mockup
+                  </>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={onClose}
+                className="w-full py-2.5 rounded-xl border border-slate-700 text-slate-400 text-xs font-medium hover:bg-slate-800 transition-colors"
+              >
+                Hủy
+              </button>
+            </div>
           </div>
         </div>
       </div>
+
+      {/* Modal Zoom Preview HD */}
+      <ImageZoomModal
+        open={!!zoomPreviewUrl}
+        onClose={() => setZoomPreviewUrl(null)}
+        imageUrl={zoomPreviewUrl}
+        title={`Xem trước Mockup Phóng to HD (${masterCode})`}
+      />
     </Modal>
   );
 }

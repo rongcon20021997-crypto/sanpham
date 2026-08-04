@@ -53,6 +53,7 @@ export interface Blank {
   size: string;
   price: number;
   image_url: string | null;
+  image_back_url?: string | null;
   created_at: string;
   blank_types?: BlankType;
 }
@@ -73,6 +74,7 @@ export interface PrintPositionData {
   posX: number;
   posY: number;
   scale: number;
+  visible?: boolean;
 }
 
 export interface Product {
@@ -85,13 +87,17 @@ export interface Product {
   video_url?: string | null;
   blank_id: string;
   print_design_id: string;
+  print_design_ids?: string[] | null;
   preview_url: string | null;
+  blank_image_type?: "front" | "combined" | string | null;
   print_position?: PrintPositionData | null;
+  print_positions?: Record<string, PrintPositionData> | null;
   price: number;
   status: "active" | "inactive";
   created_at: string;
   blanks?: Blank;
   print_designs?: PrintDesign;
+  all_print_designs?: PrintDesign[];
 }
 
 export interface BlankWithRelations extends Blank {
@@ -101,4 +107,12 @@ export interface BlankWithRelations extends Blank {
 export interface ProductWithRelations extends Product {
   blanks?: Blank;
   print_designs?: PrintDesign;
+}
+
+export interface LogoItem {
+  id: string;
+  code: string;
+  name: string;
+  image_url: string;
+  created_at?: string;
 }

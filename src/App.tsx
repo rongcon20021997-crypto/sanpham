@@ -6,6 +6,7 @@ import { DashboardPage } from "@/pages/DashboardPage";
 import { BlankTypesPage } from "@/pages/BlankTypesPage";
 import { BlanksPage } from "@/pages/BlanksPage";
 import { PrintDesignsPage } from "@/pages/PrintDesignsPage";
+import { LogosPage } from "@/pages/LogosPage";
 import { ProductsPage } from "@/pages/ProductsPage";
 import { UsersPage } from "@/pages/UsersPage";
 import { SettingsPage } from "@/pages/SettingsPage";
@@ -36,6 +37,7 @@ function AppContent() {
       {effectivePage === "blank-types" && <BlankTypesPage />}
       {effectivePage === "blanks" && <BlanksPage />}
       {effectivePage === "print-designs" && <PrintDesignsPage />}
+      {effectivePage === "logos" && <LogosPage />}
       {effectivePage === "products" && <ProductsPage />}
       {effectivePage === "users" && <UsersPage />}
       {effectivePage === "settings" && <SettingsPage />}

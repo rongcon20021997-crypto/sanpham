@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
-import type { Product, Blank, PrintDesign, BlankType } from "@/lib/types";
+import type { Product, Blank, PrintDesign, BlankType, LogoItem } from "@/lib/types";
 import { PageHeader, SearchInput, EmptyState } from "@/components/PageParts";
 import { Modal } from "@/components/Modal";
+import { ImageZoomModal } from "@/components/ImageZoomModal";
 import { Select } from "@/components/Field";
 import {
   Plus,
@@ -35,21 +36,26 @@ export interface MasterProductGroup {
   video_url: string | null;
   blank_type?: BlankType;
   print_design?: PrintDesign;
+  print_designs_list?: PrintDesign[];
   variants: Product[];
   minPrice: number;
   maxPrice: number;
 }
 
-import { MockupEditorModal } from "@/components/MockupEditorModal";
+import { MockupEditorModal, PrintDesignItem } from "@/components/MockupEditorModal";
 import type { PrintPositionData } from "@/lib/types";
 
 export interface MockupEditorTarget {
   masterCode: string;
   colorName: string;
   blankImageUrl: string | null;
-  printDesignUrl: string | null;
+  blankImageBackUrl?: string | null;
+  printDesignUrl?: string | null;
+  printDesigns: PrintDesignItem[];
   variantIds: string[];
   initialPosition?: PrintPositionData | null;
+  initialPositions?: Record<string, PrintPositionData> | null;
+  initialImageType?: string | null;
 }
 
 export function ProductsPage() {
@@ -57,6 +63,7 @@ export function ProductsPage() {
   const [blanks, setBlanks] = useState<Blank[]>([]);
   const [designs, setDesigns] = useState<PrintDesign[]>([]);
   const [types, setTypes] = useState<BlankType[]>([]);
+  const [logos, setLogos] = useState<LogoItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [filterType, setFilterType] = useState("");
@@ -83,20 +90,54 @@ export function ProductsPage() {
 
   async function load() {
     setLoading(true);
-    const [pr, bl, pd, bt] = await Promise.all([
-      supabase
-        .from("products")
-        .select("*, blanks(*, blank_types(*)), print_designs(*)")
-        .order("created_at", { ascending: false }),
-      supabase.from("blanks").select("*, blank_types(*)").order("code"),
-      supabase.from("print_designs").select("*").order("code"),
-      supabase.from("blank_types").select("*").order("name"),
-    ]);
-    setItems((pr.data as Product[]) || []);
-    setBlanks((bl.data as Blank[]) || []);
-    setDesigns((pd.data as PrintDesign[]) || []);
-    setTypes((bt.data as BlankType[]) || []);
-    setLoading(false);
+    try {
+      const [pr, bl, pd, bt, lg] = await Promise.all([
+        supabase
+          .from("products")
+          .select("*, blanks(*, blank_types(*)), print_designs(*)")
+          .order("created_at", { ascending: false }),
+        supabase.from("blanks").select("*, blank_types(*)").order("code"),
+        supabase.from("print_designs").select("*").order("code"),
+        supabase.from("blank_types").select("*").order("name"),
+        supabase.from("logos").select("*").order("code"),
+      ]);
+
+      if (pr.error) console.error("Error loading products:", pr.error);
+      if (bl.error) console.error("Error loading blanks:", bl.error);
+      if (pd.error) console.error("Error loading print_designs:", pd.error);
+
+      const rawProducts = (pr.data as Product[]) || [];
+      const rawDesigns = (pd.data as PrintDesign[]) || [];
+      const designMap = new Map<string, PrintDesign>();
+      rawDesigns.forEach((d) => {
+        if (d && d.id) designMap.set(d.id, d);
+      });
+
+      const enrichedProducts = rawProducts.map((p) => {
+        const designIds = p.print_design_ids && p.print_design_ids.length > 0
+          ? p.print_design_ids
+          : [p.print_design_id].filter(Boolean);
+
+        const allDesigns = designIds
+          .map((id) => designMap.get(id))
+          .filter((d): d is PrintDesign => Boolean(d));
+
+        return {
+          ...p,
+          all_print_designs: allDesigns.length > 0 ? allDesigns : p.print_designs ? [p.print_designs] : [],
+        };
+      });
+
+      setItems(enrichedProducts);
+      setBlanks((bl.data as Blank[]) || []);
+      setDesigns(rawDesigns);
+      setTypes((bt.data as BlankType[]) || []);
+      setLogos((lg.data as LogoItem[]) || []);
+    } catch (err) {
+      console.error("Error in load():", err);
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -118,11 +159,12 @@ export function ProductsPage() {
 
   const filtered = useMemo(() => {
     return items.filter((p) => {
+      if (!p) return false;
       const blank = p.blanks;
       const design = p.print_designs;
       const matchSearch =
-        p.code.toLowerCase().includes(search.toLowerCase()) ||
-        p.name.toLowerCase().includes(search.toLowerCase()) ||
+        (p.code || "").toLowerCase().includes(search.toLowerCase()) ||
+        (p.name || "").toLowerCase().includes(search.toLowerCase()) ||
         (p.master_code || "").toLowerCase().includes(search.toLowerCase()) ||
         (p.master_name || "").toLowerCase().includes(search.toLowerCase()) ||
         (blank?.color || "").toLowerCase().includes(search.toLowerCase()) ||
@@ -143,19 +185,33 @@ export function ProductsPage() {
     const map = new Map<string, MasterProductGroup>();
 
     filtered.forEach((p) => {
+      if (!p) return;
       const blankType = p.blanks?.blank_types;
-      const design = p.print_designs;
+      const primaryDesign = p.print_designs;
+      const allDesigns = (p.all_print_designs && p.all_print_designs.length > 0
+        ? p.all_print_designs
+        : primaryDesign
+        ? [primaryDesign]
+        : []
+      ).filter(Boolean);
+
+      const designKeyStr = allDesigns.map((d) => d?.id).filter(Boolean).sort().join("+") || p.print_design_id || "design";
+
+      // Key phân nhóm duy nhất kết hợp cả master_code (hoặc blank_type_id) và tổ hợp danh sách hình in
       const key = p.master_code
-        ? p.master_code
-        : `${p.blanks?.blank_type_id || "type"}_${p.print_design_id || "design"}`;
+        ? `${p.master_code}_${designKeyStr}`
+        : `${p.blanks?.blank_type_id || "type"}_${designKeyStr}`;
 
       if (!map.has(key)) {
+        const designNames = allDesigns.map((d) => d?.name).filter(Boolean).join(" + ") || primaryDesign?.name || "Hình in";
+        const designCodes = allDesigns.map((d) => d?.code).filter(Boolean).join("+") || primaryDesign?.code || "PRINT";
+
         const fallbackName = p.master_name
           ? p.master_name
-          : `${blankType?.name || "Sản phẩm"} - ${design?.name || "Hình in"}`;
+          : `${blankType?.name || "Sản phẩm"} - ${designNames}`;
         const fallbackCode = p.master_code
           ? p.master_code
-          : `${blankType?.code || "SP"}-${design?.code || "PRINT"}`;
+          : `${blankType?.code || "SP"}-${designCodes}`;
 
         map.set(key, {
           key,
@@ -164,7 +220,8 @@ export function ProductsPage() {
           images: p.images || [],
           video_url: p.video_url || null,
           blank_type: blankType,
-          print_design: design,
+          print_design: primaryDesign,
+          print_designs_list: allDesigns,
           variants: [p],
           minPrice: Number(p.price) || 0,
           maxPrice: Number(p.price) || 0,
@@ -242,54 +299,52 @@ export function ProductsPage() {
     <div className="animate-fade-in space-y-4 sm:space-y-5">
       <PageHeader
         title="Sản phẩm & Biến thể"
-        subtitle="Quản lý sản phẩm chung, tạo biến thể tự động từ phôi + hình in, album ảnh & video"
+        subtitle="Quản lý sản phẩm chung & biến thể"
         actions={
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
+          <div className="flex flex-wrap items-center gap-2">
             <SearchInput value={search} onChange={setSearch} placeholder="Tìm mã, tên, màu, size..." />
             
-            <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowFilters((s) => !s)}
+              className={`flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-medium transition-colors ${
+                showFilters || hasFilters
+                  ? "border-brand-500/30 bg-brand-500/10 text-brand-400"
+                  : "border-slate-700 text-slate-300 hover:bg-slate-800"
+              }`}
+            >
+              <Filter size={15} /> Lọc
+            </button>
+            
+            <div className="flex bg-slate-800/80 p-1 rounded-xl border border-slate-700/60 shrink-0">
               <button
-                onClick={() => setShowFilters((s) => !s)}
-                className={`flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-2 sm:py-2.5 rounded-xl border text-xs sm:text-sm font-medium transition-colors ${
-                  showFilters || hasFilters
-                    ? "border-brand-500/30 bg-brand-500/10 text-brand-400"
-                    : "border-slate-700 text-slate-300 hover:bg-slate-800"
+                onClick={() => setViewMode("grouped")}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
+                  viewMode === "grouped"
+                    ? "bg-brand-500 text-white shadow-sm"
+                    : "text-slate-400 hover:text-slate-200"
                 }`}
+                title="Xem theo sản phẩm chung"
               >
-                <Filter size={15} /> Lọc
+                <LayoutGrid size={14} /> <span className="hidden sm:inline">Nhóm SP</span>
               </button>
-              
-              <div className="flex bg-slate-800/80 p-1 rounded-xl border border-slate-700/60 shrink-0">
-                <button
-                  onClick={() => setViewMode("grouped")}
-                  className={`flex items-center gap-1 px-2.5 py-1 sm:py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                    viewMode === "grouped"
-                      ? "bg-brand-500 text-white shadow-sm"
-                      : "text-slate-400 hover:text-slate-200"
-                  }`}
-                  title="Xem theo sản phẩm chung"
-                >
-                  <LayoutGrid size={14} /> <span className="hidden sm:inline">Nhóm SP</span>
-                </button>
-                <button
-                  onClick={() => setViewMode("flat")}
-                  className={`flex items-center gap-1 px-2.5 py-1 sm:py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                    viewMode === "flat"
-                      ? "bg-brand-500 text-white shadow-sm"
-                      : "text-slate-400 hover:text-slate-200"
-                  }`}
-                  title="Xem tất cả biến thể"
-                >
-                  <List size={14} /> <span className="hidden sm:inline">Biến thể</span>
-                </button>
-              </div>
+              <button
+                onClick={() => setViewMode("flat")}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
+                  viewMode === "flat"
+                    ? "bg-brand-500 text-white shadow-sm"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+                title="Xem tất cả biến thể"
+              >
+                <List size={14} /> <span className="hidden sm:inline">Biến thể</span>
+              </button>
             </div>
 
             <button
               onClick={() => setCreateModal(true)}
-              className="w-full sm:w-auto flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl bg-brand-500 text-white text-xs font-semibold hover:bg-brand-600 transition-colors shadow-md shadow-brand-500/20"
+              className="px-3.5 py-2 rounded-xl bg-brand-500 hover:bg-brand-600 text-white text-xs font-semibold flex items-center justify-center gap-1.5 shadow-md shadow-brand-500/20 transition-all shrink-0 cursor-pointer"
             >
-              <Plus size={15} /> Tạo SP mới
+              <Plus size={16} /> Tạo SP mới
             </button>
           </div>
         }
@@ -328,7 +383,14 @@ export function ProductsPage() {
             // Nhóm tất cả các biến thể thuộc sản phẩm này theo PHÔI MÀU (Color Sub-groups)
             const colorSubGroupsMap: Record<
               string,
-              { color: string; blank_image: string | null; preview_url: string | null; variants: Product[] }
+              {
+                color: string;
+                blank_image: string | null;
+                blank_image_back: string | null;
+                preview_url: string | null;
+                blank_image_type?: string | null;
+                variants: Product[];
+              }
             > = {};
 
             group.variants.forEach((v) => {
@@ -337,13 +399,24 @@ export function ProductsPage() {
                 colorSubGroupsMap[colorKey] = {
                   color: colorKey,
                   blank_image: v.blanks?.image_url || null,
+                  blank_image_back: v.blanks?.image_back_url || null,
                   preview_url: v.preview_url || null,
+                  blank_image_type: v.blank_image_type || null,
                   variants: [],
                 };
               }
               colorSubGroupsMap[colorKey].variants.push(v);
+              if (!colorSubGroupsMap[colorKey].blank_image && v.blanks?.image_url) {
+                colorSubGroupsMap[colorKey].blank_image = v.blanks.image_url;
+              }
+              if (!colorSubGroupsMap[colorKey].blank_image_back && v.blanks?.image_back_url) {
+                colorSubGroupsMap[colorKey].blank_image_back = v.blanks.image_back_url;
+              }
               if (!colorSubGroupsMap[colorKey].preview_url && v.preview_url) {
                 colorSubGroupsMap[colorKey].preview_url = v.preview_url;
+              }
+              if (!colorSubGroupsMap[colorKey].blank_image_type && v.blank_image_type) {
+                colorSubGroupsMap[colorKey].blank_image_type = v.blank_image_type;
               }
             });
 
@@ -351,7 +424,7 @@ export function ProductsPage() {
 
             // Tập hợp tất cả ảnh đại diện đại diện cho các Phôi màu của sản phẩm này
             const colorMockupImages = colorSubGroups
-              .map((cg) => cg.preview_url || cg.blank_image)
+              .map((cg) => cg.preview_url || cg.blank_image || cg.blank_image_back)
               .filter(Boolean) as string[];
 
             const mainImage = colorMockupImages[0] || null;
@@ -365,8 +438,8 @@ export function ProductsPage() {
               >
                 {/* Master Product Header Card */}
                 <div className="p-3.5 sm:p-5 flex flex-col md:flex-row gap-3.5 sm:gap-5 items-start md:items-center justify-between border-b border-slate-800/80">
-                  <div className="flex gap-3 sm:gap-4 items-start sm:items-center w-full md:w-auto">
-                    {/* Media Preview Box (Hiển thị ảnh phôi màu chính sạch đẹp, nhấp chuột để phóng to) */}
+                  <div className="flex gap-3 sm:gap-4 items-start sm:items-center min-w-0 flex-1">
+                    {/* BÊN TRÁI: Box Ảnh sản phẩm chính */}
                     <div
                       onClick={() =>
                         mainImage &&
@@ -413,25 +486,37 @@ export function ProductsPage() {
                             Phôi: {group.blank_type.name}
                           </span>
                         )}
-                        {group.print_design && (
-                          <span className="text-[11px] sm:text-xs px-2.5 py-1 rounded-md bg-slate-800 text-slate-200 border border-slate-700/60 flex items-center gap-1.5 truncate max-w-[180px] sm:max-w-none">
-                            {group.print_design.png_url && (
-                              <img
-                                src={group.print_design.png_url}
-                                alt=""
-                                onClick={() =>
-                                  setZoomImage({
-                                    url: group.print_design!.png_url!,
-                                    title: `Hình in: ${group.print_design!.name}`,
-                                  })
-                                }
-                                className="w-5 h-5 object-contain rounded bg-slate-900 border border-slate-700 p-0.5 shrink-0 cursor-zoom-in hover:scale-125 transition-transform"
-                                title="Nhấp chuột để phóng to hình in"
-                              />
-                            )}
-                            <span>Hình in: <strong>{group.print_design.name}</strong></span>
-                          </span>
-                        )}
+                        {(group.print_designs_list && group.print_designs_list.length > 0
+                          ? group.print_designs_list
+                          : group.print_design
+                          ? [group.print_design]
+                          : []
+                        )
+                          .filter((pd): pd is PrintDesign => Boolean(pd && pd.name))
+                          .map((pd, idx) => (
+                            <span
+                              key={pd.id || idx}
+                              className="text-[11px] sm:text-xs px-2.5 py-1 rounded-md bg-slate-800 text-slate-200 border border-slate-700/60 flex items-center gap-1.5 truncate max-w-[200px] sm:max-w-none"
+                            >
+                              {pd.png_url && (
+                                <img
+                                  src={pd.png_url}
+                                  alt=""
+                                  onClick={() =>
+                                    setZoomImage({
+                                      url: pd.png_url!,
+                                      title: `Hình in ${idx + 1}: ${pd.name}`,
+                                    })
+                                  }
+                                  className="w-5 h-5 object-contain rounded bg-slate-900 border border-slate-700 p-0.5 shrink-0 cursor-zoom-in hover:scale-125 transition-transform"
+                                  title="Nhấp chuột để phóng to hình in"
+                                />
+                              )}
+                              <span>
+                                Hình {idx + 1}: <strong>{pd.name}</strong>
+                              </span>
+                            </span>
+                          ))}
                       </div>
                       <h3 className="text-sm sm:text-base font-bold text-slate-100 leading-snug truncate">
                         {group.master_name}
@@ -455,45 +540,40 @@ export function ProductsPage() {
                     </div>
                   </div>
 
-                  {/* Actions & Accordion Button (Mobile Friendly) */}
-                  <div className="flex items-center gap-1.5 sm:gap-2 w-full md:w-auto justify-between md:justify-end pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-800/80">
-                    <div className="flex items-center gap-1 sm:gap-1.5">
-                      <button
-                        onClick={() => setPreviewGroup(group)}
-                        className="px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-xl text-slate-300 hover:bg-slate-800 hover:text-white transition-colors text-xs font-medium flex items-center gap-1 border border-slate-700/50"
-                        title="Xem album media"
-                      >
-                        <Eye size={14} /> Media ({group.images?.length || 0})
-                      </button>
-                      <button
-                        onClick={() => setEditMasterGroup(group)}
-                        className="px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-xl text-amber-400 hover:bg-amber-500/10 transition-colors text-xs font-medium flex items-center gap-1 border border-amber-500/20"
-                        title="Sửa sản phẩm chung"
-                      >
-                        <Pencil size={14} /> <span className="hidden sm:inline">Sửa SP</span>
-                      </button>
-                      <button
-                        onClick={() => handleDeleteMasterGroup(group)}
-                        className="p-1.5 sm:p-2 rounded-xl text-slate-500 hover:bg-rose-500/10 hover:text-rose-400 transition-colors border border-slate-700/50"
-                        title="Xóa nhóm sản phẩm này"
-                      >
-                        <Trash2 size={15} />
-                      </button>
-                    </div>
-
+                  {/* BÊN PHẢI: Cụm Nút Thao tác (Media, Sửa, Xóa, Mở rộng Accordion) */}
+                  <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 ml-auto pt-2 md:pt-0">
                     <button
-                      onClick={() => toggleGroup(group.key)}
-                      className="flex items-center gap-1 px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition-colors border border-slate-700/60"
+                      onClick={() => setPreviewGroup(group)}
+                      className="px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-xl text-slate-300 hover:bg-slate-800 hover:text-white transition-colors text-xs font-medium flex items-center gap-1 border border-slate-700/50"
+                      title="Xem album media"
                     >
-                      {isExpanded ? (
-                        <>
-                          Thu gọn <ChevronUp size={15} />
-                        </>
-                      ) : (
-                        <>
-                          Phôi màu ({colorSubGroups.length}) <ChevronDown size={15} />
-                        </>
-                      )}
+                      <Eye size={14} /> Media ({group.images?.length || 0})
+                    </button>
+                    <button
+                      onClick={() => setEditMasterGroup(group)}
+                      className="px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-xl text-amber-400 hover:bg-amber-500/10 transition-colors text-xs font-medium flex items-center gap-1 border border-amber-500/20"
+                      title="Sửa sản phẩm chung"
+                    >
+                      <Pencil size={14} /> Sửa
+                    </button>
+                    <button
+                      onClick={() => handleDeleteMasterGroup(group)}
+                      className="px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-xl text-rose-400 hover:bg-rose-500/10 transition-colors text-xs font-medium flex items-center gap-1 border border-rose-500/20"
+                      title="Xóa sản phẩm chung này"
+                    >
+                      <Trash2 size={14} /> Xóa
+                    </button>
+                    <button
+                      onClick={() =>
+                        setExpandedGroups((prev) => ({
+                          ...prev,
+                          [group.key]: !isExpanded,
+                        }))
+                      }
+                      className="p-2 rounded-xl text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition-colors border border-slate-700/50 ml-1"
+                      title={isExpanded ? "Thu gọn danh sách" : "Mở rộng danh sách phôi màu"}
+                    >
+                      {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                     </button>
                   </div>
                 </div>
@@ -502,7 +582,11 @@ export function ProductsPage() {
                 {isExpanded && (
                   <div className="p-3 sm:p-4 bg-slate-950/40 space-y-4">
                     {colorSubGroups.map((cg) => {
-                      const colorMockupImage = cg.preview_url || cg.blank_image;
+                      const rawBlankImage =
+                        cg.blank_image_type === "combined" && cg.blank_image_back
+                          ? cg.blank_image_back
+                          : cg.blank_image || cg.blank_image_back;
+                      const colorMockupImage = cg.preview_url || rawBlankImage;
                       const isColorMockupDone = !!cg.preview_url;
 
                       return (
@@ -541,14 +625,14 @@ export function ProductsPage() {
 
                               <div>
                                 <div className="flex items-center gap-2">
-                                  {cg.blank_image && (
+                                  {rawBlankImage && (
                                     <img
-                                      src={cg.blank_image}
+                                      src={rawBlankImage}
                                       alt=""
                                       onClick={() =>
                                         setZoomImage({
-                                          url: cg.blank_image!,
-                                          title: `Phôi áo gốc: Màu ${formatColorName(cg.color)}`,
+                                          url: rawBlankImage,
+                                          title: `Phôi áo gốc: Màu ${formatColorName(cg.color)} (${cg.blank_image_type === "combined" ? "Hình 2: 2 Mặt" : "Hình 1: Mặt trước"})`,
                                         })
                                       }
                                       className="w-5 h-5 object-contain rounded bg-slate-800 border border-slate-700 p-0.5 shrink-0 cursor-zoom-in hover:scale-125 transition-transform"
@@ -567,16 +651,33 @@ export function ProductsPage() {
                             </div>
 
                             <button
-                              onClick={() =>
+                              onClick={() => {
+                                const list = group.print_designs_list && group.print_designs_list.length > 0
+                                  ? group.print_designs_list
+                                  : group.print_design
+                                  ? [group.print_design]
+                                  : [];
+
+                                const targetDesigns = list.map((d) => ({
+                                  id: d.id,
+                                  code: d.code,
+                                  name: d.name,
+                                  url: d.png_url,
+                                }));
+
                                 setMockupEditorTarget({
                                   masterCode: `${group.master_code}-${cg.color}`,
                                   colorName: formatColorName(cg.color),
                                   blankImageUrl: cg.blank_image,
+                                  blankImageBackUrl: cg.blank_image_back,
                                   printDesignUrl: group.print_design?.png_url || null,
+                                  printDesigns: targetDesigns,
                                   variantIds: cg.variants.map((v) => v.id),
                                   initialPosition: cg.variants.find((v) => v.print_position)?.print_position || cg.variants[0]?.print_position || null,
-                                })
-                              }
+                                  initialPositions: cg.variants.find((v) => v.print_positions)?.print_positions || null,
+                                  initialImageType: cg.blank_image_type || "front",
+                                });
+                              }}
                               className="px-3 py-1.5 rounded-xl bg-brand-500/10 text-brand-400 hover:bg-brand-500/20 transition-colors text-xs font-semibold flex items-center gap-1.5 border border-brand-500/30"
                               title={`Kéo thả & Chỉnh vị trí hình in riêng cho áo màu ${formatColorName(cg.color)}`}
                             >
@@ -757,22 +858,13 @@ export function ProductsPage() {
         <MasterGroupMediaModal group={previewGroup} onClose={() => setPreviewGroup(null)} onSaved={load} />
       )}
 
-      {/* Modal Phóng To Xem Chi Tiết Ảnh (Zoom Preview) */}
-      <Modal open={!!zoomImage} onClose={() => setZoomImage(null)} title={zoomImage?.title || "Xem ảnh phóng to"} size="md">
-        {zoomImage && (
-          <div className="p-2 flex flex-col items-center justify-center space-y-3">
-            <div className="max-h-[380px] w-full bg-slate-950 border border-slate-800 rounded-xl p-3 flex items-center justify-center overflow-hidden">
-              <img src={zoomImage.url} alt="" className="max-h-[350px] w-auto object-contain drop-shadow-md" />
-            </div>
-            <button
-              onClick={() => setZoomImage(null)}
-              className="px-4 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 border border-slate-700"
-            >
-              Đóng
-            </button>
-          </div>
-        )}
-      </Modal>
+      {/* Modal Phóng To Xem Chi Tiết Ảnh HD (Interactive Image Zoom) */}
+      <ImageZoomModal
+        open={!!zoomImage}
+        onClose={() => setZoomImage(null)}
+        imageUrl={zoomImage?.url || null}
+        title={zoomImage?.title}
+      />
 
       {/* Edit Single Variant Price & Status Modal */}
       <Modal open={!!editItem} onClose={() => setEditItem(null)} title="Sửa thông tin biến thể">
@@ -810,18 +902,25 @@ export function ProductsPage() {
         open={!!mockupEditorTarget}
         onClose={() => setMockupEditorTarget(null)}
         blankImageUrl={mockupEditorTarget?.blankImageUrl || null}
+        blankImageBackUrl={mockupEditorTarget?.blankImageBackUrl || null}
         printDesignUrl={mockupEditorTarget?.printDesignUrl || null}
+        printDesigns={mockupEditorTarget?.printDesigns || []}
+        availableLogos={logos}
         masterCode={mockupEditorTarget?.masterCode}
         initialPosition={mockupEditorTarget?.initialPosition || undefined}
-        onSaveMockup={async (newMockupUrl, position) => {
+        initialPositions={mockupEditorTarget?.initialPositions || undefined}
+        initialImageType={mockupEditorTarget?.initialImageType || "front"}
+        onSaveMockup={async (newMockupUrl, position, imageType, positionsMap) => {
           if (!mockupEditorTarget) return;
-          
-          // Cập nhật preview_url và print_position cho toàn bộ biến thể thuộc Phôi màu này
+
+          // Cập nhật preview_url, print_position, print_positions và blank_image_type cho toàn bộ biến thể thuộc Phôi màu này
           await supabase
             .from("products")
             .update({
               preview_url: newMockupUrl,
               print_position: position,
+              print_positions: positionsMap || null,
+              blank_image_type: imageType,
             })
             .in("id", mockupEditorTarget.variantIds);
 
@@ -865,6 +964,9 @@ function CreateMasterProductModal({
   const [defaultPrice, setDefaultPrice] = useState("250000");
   const [blankTypeId, setBlankTypeId] = useState("");
   const [printDesignId, setPrintDesignId] = useState("");
+  const [printDesignId2, setPrintDesignId2] = useState("");
+  const [printDesignId3, setPrintDesignId3] = useState("");
+  const [blankImageType, setBlankImageType] = useState<"front" | "combined">("front");
   const [images, setImages] = useState<string[]>([]);
   const [imageUrlInput, setImageUrlInput] = useState("");
   const [videoUrl, setVideoUrl] = useState("");
@@ -876,27 +978,36 @@ function CreateMasterProductModal({
 
   const selectedBlankType = types.find((t) => t.id === blankTypeId);
   const selectedDesign = designs.find((d) => d.id === printDesignId);
+  const selectedDesign2 = designs.find((d) => d.id === printDesignId2);
+  const selectedDesign3 = designs.find((d) => d.id === printDesignId3);
 
-  // Auto populate master code recommendation when name changes
+  const selectedDesigns = [selectedDesign, selectedDesign2, selectedDesign3].filter(
+    (d): d is PrintDesign => Boolean(d)
+  );
+
+  // Tự động gợi ý Tên & Mã sản phẩm chung khi chọn Loại phôi & các Hình in
   useEffect(() => {
-    if (masterName && !masterCode) {
-      const codeSuggestion = "SP-" + masterName.toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^A-Z0-9]/g, "").slice(0, 10);
-      setMasterCode(codeSuggestion);
+    if (selectedBlankType && selectedDesigns.length > 0) {
+      const designNames = selectedDesigns.map((d) => d.name).join(" + ");
+      const designCodes = selectedDesigns.map((d) => d.code).join("+");
+      setMasterName(`${selectedBlankType.name} - ${designNames}`);
+      setMasterCode(`${selectedBlankType.code}-${designCodes}`);
     }
-  }, [masterName]);
+  }, [blankTypeId, printDesignId, printDesignId2, printDesignId3]);
 
   // When Blank Type or Print Design changes, auto generate variants from blanks under that Blank Type
   useEffect(() => {
-    if (!blankTypeId || !selectedDesign) {
+    if (!blankTypeId || selectedDesigns.length === 0) {
       setVariantItems([]);
       return;
     }
 
     const availableBlanks = blanks.filter((b) => b.blank_type_id === blankTypeId);
+    const designCodesStr = selectedDesigns.map((d) => d.code).join("+");
 
     const generated: VariantSelectionItem[] = availableBlanks.map((b) => {
-      const basePrefix = masterCode.trim() || selectedBlankType?.code || "SP";
-      const vCode = `${basePrefix}-${b.color}-${b.size}-${selectedDesign.code}`;
+      const basePrefix = masterCode.trim() || `${selectedBlankType?.code}-${designCodesStr}` || "SP";
+      const vCode = `${basePrefix}-${b.color}-${b.size}`;
       return {
         blank_id: b.id,
         code: vCode,
@@ -911,7 +1022,7 @@ function CreateMasterProductModal({
     });
 
     setVariantItems(generated);
-  }, [blankTypeId, printDesignId, masterCode, defaultPrice, blanks, selectedDesign, selectedBlankType]);
+  }, [blankTypeId, printDesignId, printDesignId2, printDesignId3, masterCode, defaultPrice, blanks, selectedBlankType]);
 
   // Handle file uploads for gallery images
   async function handleImageUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -1001,13 +1112,52 @@ function CreateMasterProductModal({
 
     setSaving(true);
     try {
+      const targetMasterCode = masterCode.trim() || `${selectedBlankType?.code}-${selectedDesign?.code}`;
+
+      // 1. Kiểm tra xem Mã sản phẩm chung (master_code) đã được sử dụng ở sản phẩm khác chưa
+      const { data: existingMaster } = await supabase
+        .from("products")
+        .select("id, master_code")
+        .eq("master_code", targetMasterCode)
+        .limit(1);
+
+      if (existingMaster && existingMaster.length > 0) {
+        setError(`Mã sản phẩm chung "${targetMasterCode}" đã tồn tại trên hệ thống. Vui lòng thay đổi Mã sản phẩm chung (Prefix).`);
+        setSaving(false);
+        return;
+      }
+
+      // 2. Kiểm tra xem các Mã biến thể có bị trùng trong hệ thống không
+      const variantCodes = toCreate.map((v) => v.code);
+      const { data: existingVariants } = await supabase
+        .from("products")
+        .select("code")
+        .in("code", variantCodes)
+        .limit(1);
+
+      if (existingVariants && existingVariants.length > 0) {
+        setError(`Mã biến thể "${existingVariants[0].code}" đã tồn tại trên hệ thống. Vui lòng thay đổi Mã sản phẩm chung.`);
+        setSaving(false);
+        return;
+      }
+
+      const defaultPosition =
+        blankImageType === "combined"
+          ? { posX: 28, posY: 38, scale: 35 }
+          : { posX: 50, posY: 38, scale: 45 };
+
+      const selectedDesignIds = [printDesignId, printDesignId2, printDesignId3].filter(Boolean);
+
       const rows = toCreate.map((v) => ({
         master_name: masterName.trim(),
-        master_code: masterCode.trim() || `${selectedBlankType?.code}-${selectedDesign?.code}`,
+        master_code: targetMasterCode,
         code: v.code,
         name: `${masterName.trim()} (${v.color} ${v.size})`,
         blank_id: v.blank_id,
         print_design_id: printDesignId,
+        print_design_ids: selectedDesignIds,
+        blank_image_type: blankImageType,
+        print_position: defaultPosition,
         price: Number(v.price) || 0,
         images: images,
         video_url: videoUrl.trim() || null,
@@ -1017,7 +1167,7 @@ function CreateMasterProductModal({
       const { error: insertErr } = await supabase.from("products").insert(rows);
       if (insertErr) {
         if (insertErr.code === "23505") {
-          setError("Mã sản phẩm hoặc biến thể bị trùng lặp trong hệ thống.");
+          setError("Mã sản phẩm chung hoặc Mã biến thể đã bị trùng lặp trong hệ thống. Vui lòng đổi Mã sản phẩm chung khác.");
         } else {
           throw insertErr;
         }
@@ -1070,6 +1220,36 @@ function CreateMasterProductModal({
             </div>
           </div>
 
+          {/* Chọn từ 1 đến 3 Hình In */}
+          <div className="space-y-2 p-3 rounded-xl bg-slate-950/60 border border-slate-800">
+            <label className="block text-xs font-semibold text-slate-300">
+              Chọn các Hình In cho Sản phẩm (Cho phép chọn từ 1 đến 3 hình in):
+            </label>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <Select
+                label="Hình in 1 (Chính) *"
+                value={printDesignId}
+                onChange={setPrintDesignId}
+                options={designs.map((d) => ({ value: d.id, label: `${d.code} — ${d.name}` }))}
+                placeholder="-- Hình in 1 (Bắt buộc) --"
+              />
+              <Select
+                label="Hình in 2 (Mặt sau/Ngực...)"
+                value={printDesignId2}
+                onChange={setPrintDesignId2}
+                options={designs.map((d) => ({ value: d.id, label: `${d.code} — ${d.name}` }))}
+                placeholder="-- Không dùng Hình 2 --"
+              />
+              <Select
+                label="Hình in 3 (Tay áo/Cổ...)"
+                value={printDesignId3}
+                onChange={setPrintDesignId3}
+                options={designs.map((d) => ({ value: d.id, label: `${d.code} — ${d.name}` }))}
+                placeholder="-- Không dùng Hình 3 --"
+              />
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
             <Select
               label="Chọn Loại Phôi *"
@@ -1078,13 +1258,56 @@ function CreateMasterProductModal({
               options={types.map((t) => ({ value: t.id, label: `${t.name} (${t.code})` }))}
               placeholder="-- Chọn loại phôi --"
             />
-            <Select
-              label="Chọn Hình In *"
-              value={printDesignId}
-              onChange={setPrintDesignId}
-              options={designs.map((d) => ({ value: d.id, label: `${d.code} — ${d.name}` }))}
-              placeholder="-- Chọn hình in --"
-            />
+            <div>
+              <label className="block text-xs font-medium text-slate-300 mb-1">Giá bán mặc định (VND)</label>
+              <input
+                type="number"
+                value={defaultPrice}
+                onChange={(e) => setDefaultPrice(e.target.value)}
+                placeholder="250000"
+                className="w-full px-3 py-2 rounded-xl border border-slate-700 bg-slate-800 text-slate-100 text-xs sm:text-sm outline-none focus:border-brand-500"
+              />
+            </div>
+          </div>
+
+          {/* Chọn Loại Hình Phôi dùng làm Mockup Mặc Định */}
+          <div className="space-y-1.5 p-3 rounded-xl bg-slate-950/60 border border-slate-800">
+            <label className="block text-xs font-semibold text-slate-300">
+              Chọn Loại Hình Phôi làm Mockup sản phẩm:
+            </label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setBlankImageType("front")}
+                className={`p-2.5 rounded-xl border text-left text-xs font-medium transition-all flex items-center gap-2.5 ${
+                  blankImageType === "front"
+                    ? "bg-brand-500/10 border-brand-500/40 text-brand-400 font-semibold"
+                    : "bg-slate-800/40 border-slate-700/60 text-slate-400 hover:bg-slate-800"
+                }`}
+              >
+                <span className="text-base">👕</span>
+                <div>
+                  <div className="font-semibold text-slate-200">Hình 1: 1 Áo phía trước</div>
+                  <div className="text-[10px] text-slate-400">Hình đơn chỉ mặt trước (Căn vị trí giữa ngực)</div>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setBlankImageType("combined")}
+                className={`p-2.5 rounded-xl border text-left text-xs font-medium transition-all flex items-center gap-2.5 ${
+                  blankImageType === "combined"
+                    ? "bg-brand-500/10 border-brand-500/40 text-brand-400 font-semibold"
+                    : "bg-slate-800/40 border-slate-700/60 text-slate-400 hover:bg-slate-800"
+                }`}
+              >
+                <span className="text-base">👕👕</span>
+                <div>
+                  <div className="font-semibold text-slate-200">Hình 2: Trước & sau của áo</div>
+                  <div className="text-[10px] text-slate-400">Hình ghép 2 mặt (Mặt trước áo nằm bên trái)</div>
+                </div>
+              </button>
+            </div>
           </div>
 
           <div>
@@ -1341,12 +1564,28 @@ function EditMasterProductGroupModal({
     setError(null);
 
     try {
+      const newCode = masterCode.trim();
+      if (newCode && newCode !== group.master_code) {
+        const { data: existing } = await supabase
+          .from("products")
+          .select("id, master_code")
+          .eq("master_code", newCode)
+          .not("id", "in", `(${group.variants.map((v) => v.id).join(",")})`)
+          .limit(1);
+
+        if (existing && existing.length > 0) {
+          setError(`Mã sản phẩm chung "${newCode}" đã được sử dụng bởi một sản phẩm khác. Vui lòng chọn mã khác.`);
+          setSaving(false);
+          return;
+        }
+      }
+
       const variantIds = group.variants.map((v) => v.id);
       const { error: err } = await supabase
         .from("products")
         .update({
           master_name: masterName.trim(),
-          master_code: masterCode.trim(),
+          master_code: newCode,
           images: images,
           video_url: videoUrl.trim() || null,
         })
@@ -1701,15 +1940,20 @@ function MasterGroupMediaModal({
 function ProductPreview({ product }: { product: Product }) {
   const blank = product.blanks;
   const design = product.print_designs;
+  const targetBlankImage =
+    product.blank_image_type === "combined" && blank?.image_back_url
+      ? blank.image_back_url
+      : blank?.image_url || blank?.image_back_url;
+
   const mockupImage =
     product.preview_url ||
     (product.images && product.images.length > 0 ? product.images[0] : null) ||
-    blank?.image_url;
+    targetBlankImage;
 
   return (
-    <div className="space-y-4">
-      {/* Ảnh Mockup Hoàn Chỉnh */}
-      <div className="aspect-square w-full max-w-[340px] mx-auto rounded-2xl bg-slate-900 border border-slate-700/80 overflow-hidden flex items-center justify-center relative shadow-xl">
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-center">
+      {/* BÊN TRÁI: Ảnh Mockup Hoàn Chỉnh */}
+      <div className="aspect-square w-full rounded-2xl bg-slate-900 border border-slate-700/80 overflow-hidden flex items-center justify-center relative shadow-xl">
         {mockupImage ? (
           <img src={mockupImage} alt={product.code} className="w-full h-full object-contain p-2" />
         ) : (
@@ -1717,28 +1961,29 @@ function ProductPreview({ product }: { product: Product }) {
         )}
       </div>
 
-      <div className="space-y-2 p-3.5 sm:p-4 rounded-xl bg-slate-800/50 border border-slate-700/50 text-xs sm:text-sm">
-        <div className="flex justify-between">
+      {/* BÊN PHẢI: Bảng thông tin chi tiết & trạng thái */}
+      <div className="space-y-2.5 p-4 rounded-xl bg-slate-800/50 border border-slate-700/50 text-xs sm:text-sm">
+        <div className="flex justify-between border-b border-slate-700/50 pb-2">
           <span className="text-slate-400">Sản phẩm chung</span>
-          <span className="font-semibold text-slate-200">{product.master_name || product.name}</span>
+          <span className="font-semibold text-slate-200 text-right">{product.master_name || product.name}</span>
         </div>
-        <div className="flex justify-between">
+        <div className="flex justify-between border-b border-slate-700/50 pb-2">
           <span className="text-slate-400">Mã biến thể</span>
           <span className="font-mono font-semibold text-brand-400">{product.code}</span>
         </div>
-        <div className="flex justify-between">
-          <span className="text-slate-400">Phôi</span>
+        <div className="flex justify-between border-b border-slate-700/50 pb-2">
+          <span className="text-slate-400">Phôi màu & size</span>
           <span className="text-slate-300">{blank?.code} ({blank?.color} {blank?.size})</span>
         </div>
-        <div className="flex justify-between">
+        <div className="flex justify-between border-b border-slate-700/50 pb-2">
           <span className="text-slate-400">Hình in</span>
           <span className="text-slate-300">{design?.code} — {design?.name}</span>
         </div>
-        <div className="flex justify-between">
+        <div className="flex justify-between border-b border-slate-700/50 pb-2">
           <span className="text-slate-400">Giá bán</span>
           <span className="font-bold text-slate-100">{formatCurrency(Number(product.price))}</span>
         </div>
-        <div className="flex justify-between">
+        <div className="flex justify-between pt-1">
           <span className="text-slate-400">Trạng thái</span>
           <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${
             product.status === "active" ? "bg-emerald-500/10 text-emerald-400" : "bg-slate-700/50 text-slate-400"

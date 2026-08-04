@@ -25,6 +25,7 @@ export type PageKey =
   | "blank-types"
   | "blanks"
   | "print-designs"
+  | "logos"
   | "products"
   | "users"
   | "settings";
@@ -40,6 +41,7 @@ const navItems: { key: PageKey; label: string; icon: typeof LayoutDashboard; adm
   { key: "blank-types", label: "Loại phôi", icon: Layers },
   { key: "blanks", label: "Phôi", icon: Package },
   { key: "print-designs", label: "Hình in", icon: Image },
+  { key: "logos", label: "Quản lý Logo", icon: ShieldCheck },
   { key: "products", label: "Sản phẩm", icon: Boxes },
   { key: "users", label: "Nhân viên", icon: Users, adminOnly: true },
   { key: "settings", label: "Cài đặt", icon: Settings },

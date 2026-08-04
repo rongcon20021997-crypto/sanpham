@@ -16,6 +16,7 @@ interface GroupedBlank {
   color: string;
   price: number;
   image_url: string | null;
+  image_back_url?: string | null;
   sizes: string[];
   items: Blank[];
 }
@@ -38,6 +39,7 @@ export function BlanksPage() {
     selectedSizes: [] as string[],
     price: "",
     image_url: "" as string | null,
+    image_back_url: "" as string | null,
   });
 
   const [saving, setSaving] = useState(false);
@@ -74,6 +76,7 @@ export function BlanksPage() {
       selectedSizes: sizes.map((s) => s.code), // Mặc định chọn tất cả size
       price: "",
       image_url: null,
+      image_back_url: null,
     });
     setError(null);
     setModalOpen(true);
@@ -88,6 +91,7 @@ export function BlanksPage() {
       selectedSizes: group.sizes,
       price: String(group.price),
       image_url: group.image_url,
+      image_back_url: group.image_back_url || null,
     });
     setError(null);
     setModalOpen(true);
@@ -132,34 +136,112 @@ export function BlanksPage() {
 
     try {
       if (editingGroup) {
-        // Xóa toàn bộ biến thể cũ của nhóm này và tạo lại theo danh sách size mới
-        const oldIds = editingGroup.items.map((i) => i.id);
-        if (oldIds.length > 0) {
-          await supabase.from("blanks").delete().in("id", oldIds);
+        // Cập nhật phôi đã có bằng cách update theo ID của từng size để không bị đụng khoá ngoại và đụng mã trùng
+        const existingItemsByDb = editingGroup.items;
+        const existingMapBySize = new Map<string, Blank>();
+        existingItemsByDb.forEach((item) => {
+          if (item.size) existingMapBySize.set(item.size, item);
+        });
+
+        const toUpdate: Blank[] = [];
+        const toInsert: Array<{
+          code: string;
+          blank_type_id: string;
+          color: string;
+          size: string;
+          price: number;
+          image_url: string | null;
+          image_back_url: string | null;
+        }> = [];
+        const currentSizeSet = new Set(form.selectedSizes);
+
+        // Tìm các size bị người dùng bỏ chọn
+        const idsToDelete = existingItemsByDb
+          .filter((item) => item.size && !currentSizeSet.has(item.size))
+          .map((item) => item.id);
+
+        if (idsToDelete.length > 0) {
+          const { error: delErr } = await supabase.from("blanks").delete().in("id", idsToDelete);
+          if (delErr) {
+            console.warn("Không thể xóa bớt một số size cũ do đã liên kết sản phẩm:", delErr.message);
+          }
         }
+
+        form.selectedSizes.forEach((szCode) => {
+          const fullCode = baseCode.endsWith(`-${szCode}`) ? baseCode : `${baseCode}-${szCode}`;
+          const existing = existingMapBySize.get(szCode);
+          if (existing) {
+            toUpdate.push({
+              ...existing,
+              code: fullCode,
+              blank_type_id: form.blank_type_id,
+              color: form.color,
+              price: priceNum,
+              image_url: form.image_url,
+              image_back_url: form.image_back_url,
+            });
+          } else {
+            toInsert.push({
+              code: fullCode,
+              blank_type_id: form.blank_type_id,
+              color: form.color,
+              size: szCode,
+              price: priceNum,
+              image_url: form.image_url,
+              image_back_url: form.image_back_url,
+            });
+          }
+        });
+
+        // 1. Cập nhật từng dòng phôi đã có
+        for (const item of toUpdate) {
+          const { error: upErr } = await supabase
+            .from("blanks")
+            .update({
+              code: item.code,
+              blank_type_id: item.blank_type_id,
+              color: item.color,
+              price: item.price,
+              image_url: item.image_url,
+              image_back_url: item.image_back_url,
+            })
+            .eq("id", item.id);
+          if (upErr) throw upErr;
+        }
+
+        // 2. Thêm mới các size mới được chọn thêm
+        if (toInsert.length > 0) {
+          const { error: insErr } = await supabase.from("blanks").insert(toInsert);
+          if (insErr) throw insErr;
+        }
+      } else {
+        // Tạo hàng loạt (Batch insert) danh sách phôi tương ứng với từng Size được tích chọn
+        const batchPayload = form.selectedSizes.map((szCode) => {
+          const fullCode = baseCode.endsWith(`-${szCode}`) ? baseCode : `${baseCode}-${szCode}`;
+          return {
+            code: fullCode,
+            blank_type_id: form.blank_type_id,
+            color: form.color,
+            size: szCode,
+            price: priceNum,
+            image_url: form.image_url,
+            image_back_url: form.image_back_url,
+          };
+        });
+
+        const { error: insertErr } = await supabase.from("blanks").insert(batchPayload);
+        if (insertErr) throw insertErr;
       }
-
-      // Tạo hàng loạt (Batch insert) danh sách phôi tương ứng với từng Size được tích chọn
-      const batchPayload = form.selectedSizes.map((szCode) => {
-        // Sinh SKU theo chuẩn: CT220-BLK-S
-        const fullCode = baseCode.endsWith(`-${szCode}`) ? baseCode : `${baseCode}-${szCode}`;
-        return {
-          code: fullCode,
-          blank_type_id: form.blank_type_id,
-          color: form.color,
-          size: szCode,
-          price: priceNum,
-          image_url: form.image_url,
-        };
-      });
-
-      const { error: insertErr } = await supabase.from("blanks").insert(batchPayload);
-      if (insertErr) throw insertErr;
 
       setModalOpen(false);
       await load();
-    } catch (err) {
-      setError((err as Error).message);
+    } catch (err: unknown) {
+      const dbErr = err as { code?: string; message?: string };
+      if (dbErr?.code === "23505" || dbErr?.message?.includes("blanks_code_key") || dbErr?.message?.includes("unique constraint")) {
+        setError(`Mã phôi "${baseCode}" hoặc biến thể size của nó đã bị trùng với phôi đã có trong hệ thống. Vui lòng kiểm tra hoặc đổi Mã phôi cơ sở.`);
+      } else {
+        setError(dbErr?.message || "Đã xảy ra lỗi khi lưu phôi.");
+      }
     } finally {
       setSaving(false);
     }
@@ -181,7 +263,7 @@ export function BlanksPage() {
     const map = new Map<string, GroupedBlank>();
 
     for (const b of blanks) {
-      const groupKey = `${b.blank_type_id}_${b.color}_${b.image_url || ""}_${b.price}`;
+      const groupKey = `${b.blank_type_id}_${b.color}_${b.image_url || ""}_${b.image_back_url || ""}_${b.price}`;
 
       let baseCode = b.code;
       if (b.size && baseCode.endsWith(`-${b.size}`)) {
@@ -197,6 +279,7 @@ export function BlanksPage() {
           color: b.color,
           price: b.price,
           image_url: b.image_url,
+          image_back_url: b.image_back_url,
           sizes: b.size ? [b.size] : [],
           items: [b],
         });
@@ -266,9 +349,22 @@ export function BlanksPage() {
                 className="card-gradient rounded-2xl border border-slate-700/50 overflow-hidden hover:border-slate-600 transition-colors group flex flex-col justify-between"
               >
                 <div>
-                  <div className="aspect-square bg-slate-800/30 flex items-center justify-center overflow-hidden relative">
-                    {group.image_url ? (
-                      <img src={group.image_url} alt={group.baseCode} className="w-full h-full object-contain p-2" />
+                  <div className="aspect-square bg-slate-800/30 flex items-center justify-center overflow-hidden relative group/img font-mono">
+                    {group.image_url || group.image_back_url ? (
+                      <div className="w-full h-full flex items-center justify-center relative">
+                        <img
+                          src={group.image_url || group.image_back_url || ""}
+                          alt={group.baseCode}
+                          className="w-full h-full object-contain p-2"
+                        />
+                        {group.image_url && group.image_back_url && (
+                          <div className="absolute bottom-2 left-2 flex gap-1">
+                            <span className="px-1.5 py-0.5 rounded bg-black/75 text-[10px] text-white">
+                              2 Hình
+                            </span>
+                          </div>
+                        )}
+                      </div>
                     ) : (
                       <Package size={40} className="text-slate-700" />
                     )}
@@ -299,6 +395,16 @@ export function BlanksPage() {
                           {colorObj.name} ({colorObj.code})
                         </span>
                       )}
+                    </div>
+
+                    {/* Hiển thị phân loại 2 hình phôi nếu có */}
+                    <div className="flex items-center gap-1.5 text-[11px] text-slate-400 mb-3 bg-slate-900/60 p-2 rounded-lg border border-slate-800">
+                      <span className={`px-1.5 py-0.5 rounded ${group.image_url ? "bg-emerald-500/20 text-emerald-300" : "bg-slate-800 text-slate-500"}`}>
+                        {group.image_url ? "✓ Hình 1: 1 Áo" : "✕ Hình 1"}
+                      </span>
+                      <span className={`px-1.5 py-0.5 rounded ${group.image_back_url ? "bg-indigo-500/20 text-indigo-300" : "bg-slate-800 text-slate-500"}`}>
+                        {group.image_back_url ? "✓ Hình 2: 2 Mặt" : "✕ Hình 2"}
+                      </span>
                     </div>
 
                     {/* Danh sách các Biến thể Size */}
@@ -428,14 +534,23 @@ export function BlanksPage() {
             </div>
           </div>
 
-          <div>
+          <div className="space-y-4">
             <ImageUpload
               folder="blanks"
               value={form.image_url}
               onChange={(url) => setForm({ ...form, image_url: url })}
-              label="Ảnh đại diện phôi"
-              customCode={form.code ? `PHOI_${form.code}` : undefined}
+              label="Hình 1: Áo phía trước (1 áo mặt trước)"
+              customCode={form.code ? `PHOI_${form.code}_FRONT` : undefined}
               oldUrl={editingGroup?.image_url}
+            />
+
+            <ImageUpload
+              folder="blanks"
+              value={form.image_back_url}
+              onChange={(url) => setForm({ ...form, image_back_url: url })}
+              label="Hình 2: Cả trước & sau áo (Mặt trước + Mặt sau)"
+              customCode={form.code ? `PHOI_${form.code}_COMBINED` : undefined}
+              oldUrl={editingGroup?.image_back_url}
             />
           </div>
         </div>
