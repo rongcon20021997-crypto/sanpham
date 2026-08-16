@@ -43,7 +43,16 @@ export interface MasterProductGroup {
 }
 
 import { MockupEditorModal, PrintDesignItem } from "@/components/MockupEditorModal";
+import { QuickCreateModal } from "@/components/QuickCreateModal";
 import type { PrintPositionData } from "@/lib/types";
+
+export interface ColorSubGroupItem {
+  color: string;
+  blank_image: string | null;
+  blank_image_back: string | null;
+  blank_image_type?: string | null;
+  variantIds: string[];
+}
 
 export interface MockupEditorTarget {
   masterCode: string;
@@ -53,9 +62,96 @@ export interface MockupEditorTarget {
   printDesignUrl?: string | null;
   printDesigns: PrintDesignItem[];
   variantIds: string[];
+  allColorSubGroups?: ColorSubGroupItem[];
   initialPosition?: PrintPositionData | null;
   initialPositions?: Record<string, PrintPositionData> | null;
   initialImageType?: string | null;
+}
+
+// Helper tự động render canvas & upload mockup cho các phôi màu khác trong nhóm
+async function generateAndUploadMockupForBlank({
+  masterCode,
+  colorName,
+  blankImageUrl,
+  blankImageBackUrl,
+  printDesigns,
+  positionsMap,
+  imageType,
+}: {
+  masterCode: string;
+  colorName: string;
+  blankImageUrl: string | null;
+  blankImageBackUrl?: string | null;
+  printDesigns: PrintDesignItem[];
+  positionsMap?: Record<string, PrintPositionData> | null;
+  imageType: string;
+}): Promise<string | null> {
+  const targetBlankImage =
+    imageType === "combined" && blankImageBackUrl
+      ? blankImageBackUrl
+      : blankImageUrl || blankImageBackUrl || null;
+  if (!targetBlankImage || printDesigns.length === 0) return null;
+
+  try {
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+
+    const imgBlank = new Image();
+    imgBlank.crossOrigin = "anonymous";
+    imgBlank.src = targetBlankImage;
+    await new Promise((resolve) => (imgBlank.onload = resolve));
+
+    canvas.width = 1200;
+    canvas.height = 1200;
+    ctx.drawImage(imgBlank, 0, 0, 1200, 1200);
+
+    for (const design of printDesigns) {
+      const isLogo = design.id === "logo" || design.code?.toLowerCase().includes("logo");
+      const defaultX = imageType === "combined" ? (isLogo ? 21 : 28) : (isLogo ? 38 : 50);
+      const defaultY = isLogo ? 28 : 38;
+      const defaultScale = isLogo ? 16 : (imageType === "combined" ? 35 : 45);
+
+      const pos =
+        positionsMap?.[design.id] ||
+        (isLogo ? positionsMap?.["logo"] : null) ||
+        (printDesigns.indexOf(design) === 0 && positionsMap
+          ? Object.entries(positionsMap).find(([k]) => k !== "logo")?.[1]
+          : null) || {
+          posX: defaultX,
+          posY: defaultY,
+          scale: defaultScale,
+          visible: true,
+        };
+      if (pos.visible === false) continue;
+
+      const imgDesign = new Image();
+      imgDesign.crossOrigin = "anonymous";
+      imgDesign.src = design.url;
+      await new Promise((resolve) => (imgDesign.onload = resolve));
+
+      const designWidth = (pos.scale / 100) * 1200;
+      const designAspect = imgDesign.height / imgDesign.width;
+      const designHeight = designWidth * designAspect;
+
+      const drawX = (pos.posX / 100) * 1200 - designWidth / 2;
+      const drawY = (pos.posY / 100) * 1200 - designHeight / 2;
+
+      ctx.drawImage(imgDesign, drawX, drawY, designWidth, designHeight);
+    }
+
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob((b) => resolve(b), "image/webp", 0.88)
+    );
+    if (!blob) return null;
+
+    const file = new File([blob], `MOCKUP_${masterCode}_${colorName}.webp`, { type: "image/webp" });
+    const uploadedUrl = await uploadFile(file, "products/mockups", `MOCKUP_${masterCode}_${colorName}`);
+    return uploadedUrl;
+  } catch (err) {
+    console.error("Lỗi tự động sinh mockup cho màu", colorName, err);
+    return null;
+  }
 }
 
 export function ProductsPage() {
@@ -74,6 +170,7 @@ export function ProductsPage() {
   const [showFilters, setShowFilters] = useState(false);
   const [viewMode, setViewMode] = useState<"grouped" | "flat">("grouped");
 
+  const [quickCreateModal, setQuickCreateModal] = useState(false);
   const [createModal, setCreateModal] = useState(false);
   const [previewItem, setPreviewItem] = useState<Product | null>(null);
   const [previewGroup, setPreviewGroup] = useState<MasterProductGroup | null>(null);
@@ -341,10 +438,19 @@ export function ProductsPage() {
             </div>
 
             <button
-              onClick={() => setCreateModal(true)}
-              className="px-3.5 py-2 rounded-xl bg-brand-500 hover:bg-brand-600 text-white text-xs font-semibold flex items-center justify-center gap-1.5 shadow-md shadow-brand-500/20 transition-all shrink-0 cursor-pointer"
+              onClick={() => setQuickCreateModal(true)}
+              className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-brand-500 to-indigo-600 hover:from-brand-600 hover:to-indigo-700 text-white text-xs font-bold flex items-center justify-center gap-1.5 shadow-md shadow-brand-500/20 transition-all shrink-0 cursor-pointer animate-pulse-subtle"
+              title="Khởi tạo nhanh sản phẩm siêu tốc với phôi và hình in"
             >
-              <Plus size={16} /> Tạo SP mới
+              <Sparkles size={15} /> ⚡ Khởi Tạo Nhanh
+            </button>
+
+            <button
+              onClick={() => setCreateModal(true)}
+              className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-medium flex items-center justify-center gap-1.5 transition-all shrink-0 cursor-pointer"
+              title="Tạo sản phẩm với cấu hình chi tiết thủ công"
+            >
+              <Plus size={15} /> Cấu hình thủ công
             </button>
           </div>
         }
@@ -422,14 +528,34 @@ export function ProductsPage() {
 
             const colorSubGroups = Object.values(colorSubGroupsMap);
 
-            // Tập hợp tất cả ảnh đại diện đại diện cho các Phôi màu của sản phẩm này
+            // Tập hợp tất cả ảnh đại diện đại diện cho các Phôi màu của sản phẩm này (tính theo đúng loại hình phôi 1 áo hay 2 áo)
             const colorMockupImages = colorSubGroups
-              .map((cg) => cg.preview_url || cg.blank_image || cg.blank_image_back)
+              .map((cg) => {
+                const rawBlankImage =
+                  cg.blank_image_type === "combined" && cg.blank_image_back
+                    ? cg.blank_image_back
+                    : cg.blank_image || cg.blank_image_back;
+                return cg.preview_url || rawBlankImage;
+              })
               .filter(Boolean) as string[];
 
-            const mainImage = colorMockupImages[0] || null;
-            const hasRenderedMockup = colorSubGroups.some((cg) => cg.preview_url);
+            const firstSubGroup = colorSubGroups[0];
+            const firstVariant = group.variants[0];
+            const firstRawBlankImage = firstSubGroup
+              ? firstSubGroup.blank_image_type === "combined" && firstSubGroup.blank_image_back
+                ? firstSubGroup.blank_image_back
+                : firstSubGroup.blank_image || firstSubGroup.blank_image_back
+              : null;
+
+            const mainImage = firstSubGroup?.preview_url || firstRawBlankImage || colorMockupImages[0] || null;
+            const hasRenderedMockup = !!firstSubGroup?.preview_url;
             const printPng = hasRenderedMockup ? null : group.print_design?.png_url;
+
+            const firstPos = firstVariant?.print_position || (
+              firstVariant?.blank_image_type === "combined"
+                ? { posX: 28, posY: 38, scale: 35 }
+                : { posX: 50, posY: 38, scale: 45 }
+            );
 
             return (
               <div
@@ -460,7 +586,13 @@ export function ProductsPage() {
                         <img
                           src={printPng}
                           alt=""
-                          className="absolute w-[60%] h-[60%] object-contain pointer-events-none top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2"
+                          style={{
+                            left: `${firstPos.posX ?? (firstVariant?.blank_image_type === "combined" ? 28 : 50)}%`,
+                            top: `${firstPos.posY ?? 38}%`,
+                            width: `${firstPos.scale ?? (firstVariant?.blank_image_type === "combined" ? 35 : 45)}%`,
+                            transform: "translate(-50%, -50%)",
+                          }}
+                          className="absolute object-contain pointer-events-none"
                         />
                       )}
                       {colorMockupImages.length > 1 && (
@@ -618,7 +750,13 @@ export function ProductsPage() {
                                   <img
                                     src={group.print_design.png_url}
                                     alt=""
-                                    className="absolute w-[60%] h-[60%] object-contain pointer-events-none top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2"
+                                    style={{
+                                      left: `${(cg.variants[0]?.print_position?.posX ?? (cg.blank_image_type === "combined" ? 28 : 50))}%`,
+                                      top: `${(cg.variants[0]?.print_position?.posY ?? 38)}%`,
+                                      width: `${(cg.variants[0]?.print_position?.scale ?? (cg.blank_image_type === "combined" ? 35 : 45))}%`,
+                                      transform: "translate(-50%, -50%)",
+                                    }}
+                                    className="absolute object-contain pointer-events-none"
                                   />
                                 )}
                               </div>
@@ -673,6 +811,13 @@ export function ProductsPage() {
                                   printDesignUrl: group.print_design?.png_url || null,
                                   printDesigns: targetDesigns,
                                   variantIds: cg.variants.map((v) => v.id),
+                                  allColorSubGroups: colorSubGroups.map((c) => ({
+                                    color: c.color,
+                                    blank_image: c.blank_image,
+                                    blank_image_back: c.blank_image_back,
+                                    blank_image_type: c.blank_image_type,
+                                    variantIds: c.variants.map((v) => v.id),
+                                  })),
                                   initialPosition: cg.variants.find((v) => v.print_position)?.print_position || cg.variants[0]?.print_position || null,
                                   initialPositions: cg.variants.find((v) => v.print_positions)?.print_positions || null,
                                   initialImageType: cg.blank_image_type || "front",
@@ -829,6 +974,18 @@ export function ProductsPage() {
         </div>
       )}
 
+      {/* Modal Khởi Tạo Nhanh Siêu Tốc & Check Trùng Phôi / Hình In */}
+      <QuickCreateModal
+        open={quickCreateModal}
+        onClose={() => setQuickCreateModal(false)}
+        existingProducts={items}
+        blanks={blanks}
+        designs={designs}
+        types={types}
+        logos={logos}
+        onCreated={load}
+      />
+
       {/* Master Product Creation Modal */}
       <CreateMasterProductModal
         open={createModal}
@@ -907,13 +1064,14 @@ export function ProductsPage() {
         printDesigns={mockupEditorTarget?.printDesigns || []}
         availableLogos={logos}
         masterCode={mockupEditorTarget?.masterCode}
+        hasOtherColors={(mockupEditorTarget?.allColorSubGroups?.length || 0) > 1}
         initialPosition={mockupEditorTarget?.initialPosition || undefined}
         initialPositions={mockupEditorTarget?.initialPositions || undefined}
         initialImageType={mockupEditorTarget?.initialImageType || "front"}
-        onSaveMockup={async (newMockupUrl, position, imageType, positionsMap) => {
+        onSaveMockup={async (newMockupUrl, position, imageType, positionsMap, applyToAllColors, activeDesigns) => {
           if (!mockupEditorTarget) return;
 
-          // Cập nhật preview_url, print_position, print_positions và blank_image_type cho toàn bộ biến thể thuộc Phôi màu này
+          // 1. Cập nhật preview_url, print_position, print_positions và blank_image_type cho toàn bộ biến thể thuộc Phôi màu này
           await supabase
             .from("products")
             .update({
@@ -923,6 +1081,38 @@ export function ProductsPage() {
               blank_image_type: imageType,
             })
             .in("id", mockupEditorTarget.variantIds);
+
+          // 2. Nếu tích chọn "Đồng bộ vị trí cho tất cả phôi màu" và có nhiều phôi màu khác
+          if (applyToAllColors && mockupEditorTarget.allColorSubGroups && mockupEditorTarget.allColorSubGroups.length > 1) {
+            const currentFirstId = mockupEditorTarget.variantIds[0];
+            const otherGroups = mockupEditorTarget.allColorSubGroups.filter(
+              (g) => g.variantIds[0] !== currentFirstId
+            );
+
+            const targetDesignsToRender = activeDesigns || mockupEditorTarget.printDesigns;
+
+            for (const other of otherGroups) {
+              const otherMockupUrl = await generateAndUploadMockupForBlank({
+                masterCode: mockupEditorTarget.masterCode.split("-")[0] || "SP",
+                colorName: formatColorName(other.color),
+                blankImageUrl: other.blank_image,
+                blankImageBackUrl: other.blank_image_back,
+                printDesigns: targetDesignsToRender,
+                positionsMap: positionsMap,
+                imageType: imageType,
+              });
+
+              await supabase
+                .from("products")
+                .update({
+                  preview_url: otherMockupUrl || newMockupUrl,
+                  print_position: position,
+                  print_positions: positionsMap || null,
+                  blank_image_type: imageType,
+                })
+                .in("id", other.variantIds);
+            }
+          }
 
           await load();
         }}
@@ -1184,353 +1374,400 @@ function CreateMasterProductModal({
   }
 
   return (
-    <Modal open={open} onClose={onClose} title="Tạo sản phẩm chung & các Biến thể" size="2xl">
-      <div className="space-y-4 sm:space-y-5">
-        {/* Step 1: Base Product Info & Media */}
-        <div className="p-3.5 sm:p-4 rounded-xl bg-slate-900/60 border border-slate-700/60 space-y-3 sm:space-y-4">
-          <div className="flex items-center gap-2 pb-2 border-b border-slate-800">
-            <Sparkles size={16} className="text-brand-400 shrink-0" />
-            <h4 className="text-xs sm:text-sm font-semibold text-slate-200">1. Thông tin Sản phẩm chung & Media</h4>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-            <div>
-              <label className="block text-xs font-medium text-slate-300 mb-1">
-                Tên sản phẩm chung <span className="text-rose-400">*</span>
-              </label>
-              <input
-                type="text"
-                value={masterName}
-                onChange={(e) => setMasterName(e.target.value)}
-                placeholder="VD: Áo T-Shirt Oversize Graphic Vintage"
-                className="w-full px-3 py-2 rounded-xl border border-slate-700 bg-slate-800 text-slate-100 text-xs sm:text-sm outline-none focus:border-brand-500"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-300 mb-1">
-                Mã sản phẩm chung (Prefix)
-              </label>
-              <input
-                type="text"
-                value={masterCode}
-                onChange={(e) => setMasterCode(e.target.value)}
-                placeholder="VD: SP-SKULL-01"
-                className="w-full px-3 py-2 rounded-xl border border-slate-700 bg-slate-800 text-slate-100 text-xs sm:text-sm font-mono outline-none focus:border-brand-500"
-              />
-            </div>
-          </div>
-
-          {/* Chọn từ 1 đến 3 Hình In */}
-          <div className="space-y-2 p-3 rounded-xl bg-slate-950/60 border border-slate-800">
-            <label className="block text-xs font-semibold text-slate-300">
-              Chọn các Hình In cho Sản phẩm (Cho phép chọn từ 1 đến 3 hình in):
-            </label>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <Select
-                label="Hình in 1 (Chính) *"
-                value={printDesignId}
-                onChange={setPrintDesignId}
-                options={designs.map((d) => ({ value: d.id, label: `${d.code} — ${d.name}` }))}
-                placeholder="-- Hình in 1 (Bắt buộc) --"
-              />
-              <Select
-                label="Hình in 2 (Mặt sau/Ngực...)"
-                value={printDesignId2}
-                onChange={setPrintDesignId2}
-                options={designs.map((d) => ({ value: d.id, label: `${d.code} — ${d.name}` }))}
-                placeholder="-- Không dùng Hình 2 --"
-              />
-              <Select
-                label="Hình in 3 (Tay áo/Cổ...)"
-                value={printDesignId3}
-                onChange={setPrintDesignId3}
-                options={designs.map((d) => ({ value: d.id, label: `${d.code} — ${d.name}` }))}
-                placeholder="-- Không dùng Hình 3 --"
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-            <Select
-              label="Chọn Loại Phôi *"
-              value={blankTypeId}
-              onChange={setBlankTypeId}
-              options={types.map((t) => ({ value: t.id, label: `${t.name} (${t.code})` }))}
-              placeholder="-- Chọn loại phôi --"
-            />
-            <div>
-              <label className="block text-xs font-medium text-slate-300 mb-1">Giá bán mặc định (VND)</label>
-              <input
-                type="number"
-                value={defaultPrice}
-                onChange={(e) => setDefaultPrice(e.target.value)}
-                placeholder="250000"
-                className="w-full px-3 py-2 rounded-xl border border-slate-700 bg-slate-800 text-slate-100 text-xs sm:text-sm outline-none focus:border-brand-500"
-              />
-            </div>
-          </div>
-
-          {/* Chọn Loại Hình Phôi dùng làm Mockup Mặc Định */}
-          <div className="space-y-1.5 p-3 rounded-xl bg-slate-950/60 border border-slate-800">
-            <label className="block text-xs font-semibold text-slate-300">
-              Chọn Loại Hình Phôi làm Mockup sản phẩm:
-            </label>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => setBlankImageType("front")}
-                className={`p-2.5 rounded-xl border text-left text-xs font-medium transition-all flex items-center gap-2.5 ${
-                  blankImageType === "front"
-                    ? "bg-brand-500/10 border-brand-500/40 text-brand-400 font-semibold"
-                    : "bg-slate-800/40 border-slate-700/60 text-slate-400 hover:bg-slate-800"
-                }`}
-              >
-                <span className="text-base">👕</span>
-                <div>
-                  <div className="font-semibold text-slate-200">Hình 1: 1 Áo phía trước</div>
-                  <div className="text-[10px] text-slate-400">Hình đơn chỉ mặt trước (Căn vị trí giữa ngực)</div>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setBlankImageType("combined")}
-                className={`p-2.5 rounded-xl border text-left text-xs font-medium transition-all flex items-center gap-2.5 ${
-                  blankImageType === "combined"
-                    ? "bg-brand-500/10 border-brand-500/40 text-brand-400 font-semibold"
-                    : "bg-slate-800/40 border-slate-700/60 text-slate-400 hover:bg-slate-800"
-                }`}
-              >
-                <span className="text-base">👕👕</span>
-                <div>
-                  <div className="font-semibold text-slate-200">Hình 2: Trước & sau của áo</div>
-                  <div className="text-[10px] text-slate-400">Hình ghép 2 mặt (Mặt trước áo nằm bên trái)</div>
-                </div>
-              </button>
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-slate-300 mb-1">Giá bán mặc định (VND)</label>
-            <input
-              type="number"
-              value={defaultPrice}
-              onChange={(e) => setDefaultPrice(e.target.value)}
-              placeholder="250000"
-              className="w-full px-3 py-2 rounded-xl border border-slate-700 bg-slate-800 text-slate-100 text-xs sm:text-sm outline-none focus:border-brand-500"
-            />
-          </div>
-
-          {/* Media upload: Gallery Images */}
-          <div className="space-y-2 pt-1">
-            <label className="block text-xs font-medium text-slate-300">
-              Album Hình ảnh sản phẩm (Nhiều ảnh)
-            </label>
-            <div className="flex flex-wrap gap-2.5 items-center">
-              {images.map((img, idx) => (
-                <div key={idx} className="relative w-14 h-14 sm:w-16 sm:h-16 rounded-lg bg-slate-800 border border-slate-700 overflow-hidden group">
-                  <img src={img} alt="" className="w-full h-full object-contain" />
-                  <button
-                    type="button"
-                    onClick={() => removeImage(idx)}
-                    className="absolute top-0.5 right-0.5 p-1 rounded-full bg-rose-500/80 text-white opacity-0 group-hover:opacity-100 transition-opacity"
-                  >
-                    <X size={12} />
-                  </button>
-                </div>
-              ))}
-
-              <label className="w-14 h-14 sm:w-16 sm:h-16 rounded-lg border-2 border-dashed border-slate-700 hover:border-brand-500 bg-slate-800/40 flex flex-col items-center justify-center text-slate-400 hover:text-brand-400 cursor-pointer transition-colors shrink-0">
-                <Upload size={16} />
-                <span className="text-[10px] mt-0.5">Tải ảnh</span>
-                <input type="file" accept="image/*" multiple onChange={handleImageUpload} className="hidden" />
-              </label>
-
-              <div className="flex-1 flex gap-1.5 min-w-[180px] w-full sm:w-auto">
-                <input
-                  type="text"
-                  value={imageUrlInput}
-                  onChange={(e) => setImageUrlInput(e.target.value)}
-                  placeholder="Dán URL ảnh..."
-                  className="flex-1 px-2.5 py-1.5 rounded-lg border border-slate-700 bg-slate-800 text-xs text-slate-200 outline-none"
-                />
-                <button
-                  type="button"
-                  onClick={addImageUrl}
-                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200 border border-slate-700 shrink-0"
-                >
-                  Thêm
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Media upload: Video */}
-          <div className="space-y-2 pt-1">
-            <label className="block text-xs font-medium text-slate-300">Video giới thiệu sản phẩm</label>
-            <div className="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center">
-              <input
-                type="text"
-                value={videoUrl}
-                onChange={(e) => setVideoUrl(e.target.value)}
-                placeholder="Nhập URL video (.mp4, youtube embed...)"
-                className="flex-1 px-3 py-2 rounded-xl border border-slate-700 bg-slate-800 text-xs text-slate-200 outline-none"
-              />
-              <label className="px-3 py-2 rounded-xl border border-slate-700 bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-300 cursor-pointer flex items-center justify-center gap-1.5 shrink-0">
-                <Video size={14} /> Tải Video
-                <input type="file" accept="video/*" onChange={handleVideoUpload} className="hidden" />
-              </label>
-            </div>
-          </div>
-          {uploadingMedia && (
-            <p className="text-xs text-brand-400 flex items-center gap-1">
-              <Loader2 size={12} className="animate-spin" /> Đang tải file phương tiện lên...
-            </p>
-          )}
-        </div>
-
-        {/* Step 2: Auto Generated Variant Table */}
-        <div className="p-3.5 sm:p-4 rounded-xl bg-slate-900/60 border border-slate-700/60 space-y-3">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-800">
-            <div className="flex items-center gap-2">
-              <Layers size={16} className="text-brand-400 shrink-0" />
-              <h4 className="text-xs sm:text-sm font-semibold text-slate-200">
-                2. Danh sách biến thể tự động từ Phôi & Hình in
+    <Modal open={open} onClose={onClose} title="Tạo sản phẩm chung & các Biến thể" size="lg">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 items-stretch select-none text-xs">
+        {/* CỘT TRÁI (7/12): THÔNG TIN SẢN PHẨM CHUNG & MEDIA */}
+        <div className="lg:col-span-7 p-3 rounded-xl bg-slate-900/80 border border-slate-800 space-y-2.5 flex flex-col justify-between">
+          <div className="space-y-2.5">
+            <div className="flex items-center gap-1.5 pb-1.5 border-b border-slate-800">
+              <Sparkles size={14} className="text-brand-400 shrink-0" />
+              <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wide">
+                1. Thông tin Sản phẩm & Media
               </h4>
             </div>
-            {variantItems.length > 0 && (
-              <div className="flex items-center gap-2 text-xs">
-                <span className="text-slate-400">
-                  Đã chọn: <strong className="text-brand-400">{selectedCount}</strong> / {variantItems.length}
-                </span>
+
+            {/* Tên & Mã SP */}
+            <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
+              <div className="sm:col-span-7">
+                <label className="block text-[11px] font-medium text-slate-300 mb-0.5">
+                  Tên sản phẩm chung <span className="text-rose-400">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={masterName}
+                  onChange={(e) => setMasterName(e.target.value)}
+                  placeholder="VD: Áo T-Shirt Oversize Graphic"
+                  className="w-full px-2.5 py-1.5 rounded-lg border border-slate-700 bg-slate-800 text-slate-100 text-xs outline-none focus:border-brand-500 font-medium"
+                />
+              </div>
+              <div className="sm:col-span-5">
+                <label className="block text-[11px] font-medium text-slate-300 mb-0.5">
+                  Mã SP (Prefix)
+                </label>
+                <input
+                  type="text"
+                  value={masterCode}
+                  onChange={(e) => setMasterCode(e.target.value)}
+                  placeholder="VD: SP-SKULL-01"
+                  className="w-full px-2.5 py-1.5 rounded-lg border border-slate-700 bg-slate-800 text-slate-100 text-xs font-mono outline-none focus:border-brand-500"
+                />
+              </div>
+            </div>
+
+            {/* Chọn Loại Phôi & Giá mặc định */}
+            <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-end">
+              <div className="sm:col-span-7">
+                <label className="block text-[11px] font-medium text-slate-300 mb-0.5">
+                  Chọn Loại Phôi <span className="text-rose-400">*</span>
+                </label>
+                <select
+                  value={blankTypeId}
+                  onChange={(e) => setBlankTypeId(e.target.value)}
+                  className="w-full px-2.5 py-1.5 rounded-lg border border-slate-700 bg-slate-800 text-slate-100 text-xs outline-none focus:border-brand-500 font-medium cursor-pointer"
+                >
+                  <option value="">-- Chọn loại phôi --</option>
+                  {types.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name} ({t.code})
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="sm:col-span-5">
+                <label className="block text-[11px] font-medium text-slate-300 mb-0.5">
+                  Giá mặc định (VND)
+                </label>
+                <input
+                  type="number"
+                  value={defaultPrice}
+                  onChange={(e) => setDefaultPrice(e.target.value)}
+                  placeholder="250000"
+                  className="w-full px-2.5 py-1.5 rounded-lg border border-slate-700 bg-slate-800 text-slate-100 text-xs font-bold outline-none focus:border-brand-500 text-right"
+                />
+              </div>
+            </div>
+
+            {/* Chọn 1 - 3 Hình In */}
+            <div className="space-y-1.5 p-2 rounded-lg bg-slate-950/60 border border-slate-800/80">
+              <label className="block text-[10px] font-semibold text-slate-300">
+                Chọn Hình In (Tối đa 3 hình):
+              </label>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5">
+                <div>
+                  <label className="block text-[10px] text-slate-400 mb-0.5">
+                    Hình 1 (Chính) <span className="text-rose-400">*</span>
+                  </label>
+                  <select
+                    value={printDesignId}
+                    onChange={(e) => setPrintDesignId(e.target.value)}
+                    className="w-full px-2 py-1.5 rounded-lg border border-slate-700 bg-slate-800 text-slate-100 text-xs outline-none focus:border-brand-500 cursor-pointer truncate"
+                  >
+                    <option value="">-- Hình 1 (Bắt buộc) --</option>
+                    {designs.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.code} — {d.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] text-slate-400 mb-0.5">
+                    Hình 2 (Sau/Ngực)
+                  </label>
+                  <select
+                    value={printDesignId2}
+                    onChange={(e) => setPrintDesignId2(e.target.value)}
+                    className="w-full px-2 py-1.5 rounded-lg border border-slate-700 bg-slate-800 text-slate-100 text-xs outline-none focus:border-brand-500 cursor-pointer truncate"
+                  >
+                    <option value="">-- Không dùng --</option>
+                    {designs.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.code} — {d.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] text-slate-400 mb-0.5">
+                    Hình 3 (Tay/Cổ)
+                  </label>
+                  <select
+                    value={printDesignId3}
+                    onChange={(e) => setPrintDesignId3(e.target.value)}
+                    className="w-full px-2 py-1.5 rounded-lg border border-slate-700 bg-slate-800 text-slate-100 text-xs outline-none focus:border-brand-500 cursor-pointer truncate"
+                  >
+                    <option value="">-- Không dùng --</option>
+                    {designs.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.code} — {d.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            {/* Kiểu Mockup */}
+            <div className="space-y-1 p-2 rounded-lg bg-slate-950/60 border border-slate-800/80">
+              <label className="block text-[10px] font-semibold text-slate-300">
+                Loại hình mockup:
+              </label>
+              <div className="grid grid-cols-2 gap-1.5">
                 <button
                   type="button"
-                  onClick={() => toggleAllVariants(true)}
-                  className="text-brand-400 hover:underline font-medium"
+                  onClick={() => setBlankImageType("front")}
+                  className={`p-1.5 rounded-lg border text-left text-xs transition-all flex items-center gap-1.5 ${
+                    blankImageType === "front"
+                      ? "bg-brand-500/10 border-brand-500/40 text-brand-400 font-semibold"
+                      : "bg-slate-800/40 border-slate-700/60 text-slate-400 hover:bg-slate-800"
+                  }`}
                 >
-                  Chọn tất cả
+                  <span>👕</span>
+                  <div className="truncate">
+                    <div className="font-semibold text-slate-200 text-[11px]">Mặt trước (1 Áo)</div>
+                  </div>
                 </button>
-                <span>|</span>
                 <button
                   type="button"
-                  onClick={() => toggleAllVariants(false)}
-                  className="text-slate-400 hover:underline"
+                  onClick={() => setBlankImageType("combined")}
+                  className={`p-1.5 rounded-lg border text-left text-xs transition-all flex items-center gap-1.5 ${
+                    blankImageType === "combined"
+                      ? "bg-brand-500/10 border-brand-500/40 text-brand-400 font-semibold"
+                      : "bg-slate-800/40 border-slate-700/60 text-slate-400 hover:bg-slate-800"
+                  }`}
                 >
-                  Bỏ chọn tất cả
+                  <span>👕👕</span>
+                  <div className="truncate">
+                    <div className="font-semibold text-slate-200 text-[11px]">Trước & Sau (2 Mặt)</div>
+                  </div>
                 </button>
               </div>
-            )}
-          </div>
+            </div>
 
-          {!blankTypeId || !printDesignId ? (
-            <div className="py-6 sm:py-8 text-center text-xs text-slate-500 border border-dashed border-slate-800 rounded-xl px-3">
-              Vui lòng chọn <strong>Loại phôi</strong> và <strong>Hình in</strong> ở trên để hiển thị danh sách biến thể.
-            </div>
-          ) : variantItems.length === 0 ? (
-            <div className="py-6 sm:py-8 text-center text-xs text-amber-400/90 border border-dashed border-amber-500/20 bg-amber-500/5 rounded-xl px-3">
-              Chưa tìm thấy phôi nào thuộc loại <strong>"{selectedBlankType?.name}"</strong>. Bạn hãy vào mục <strong>Quản lý Phôi</strong> để thêm phôi màu & size trước.
-            </div>
-          ) : variantItems.length === 0 ? (
-            <div className="py-6 sm:py-8 text-center text-xs text-amber-400/90 border border-dashed border-amber-500/20 bg-amber-500/5 rounded-xl px-3">
-              Chưa tìm thấy phôi nào thuộc loại <strong>"{selectedBlankType?.name}"</strong>. Bạn hãy vào mục <strong>Quản lý Phôi</strong> để thêm phôi màu & size trước.
-            </div>
-          ) : (
-            <div className="space-y-3 max-h-[340px] overflow-y-auto pr-1">
-              {Object.entries(
-                variantItems.reduce<Record<string, VariantSelectionItem[]>>((acc, v) => {
-                  if (!acc[v.color]) acc[v.color] = [];
-                  acc[v.color].push(v);
-                  return acc;
-                }, {})
-              ).map(([colorName, colorVariants]) => {
-                const isAllColorSelected = colorVariants.every((cv) => cv.selected);
-                const isSomeColorSelected = colorVariants.some((cv) => cv.selected);
-
-                return (
-                  <div key={colorName} className="rounded-xl bg-slate-950/60 border border-slate-800 p-3 space-y-2.5">
-                    {/* Header chọn cả Phôi Màu */}
-                    <div className="flex items-center justify-between border-b border-slate-800/80 pb-2">
-                      <label className="flex items-center gap-2 cursor-pointer font-semibold text-xs sm:text-sm text-slate-200">
-                        <input
-                          type="checkbox"
-                          checked={isAllColorSelected}
-                          ref={(input) => {
-                            if (input) input.indeterminate = isSomeColorSelected && !isAllColorSelected;
-                          }}
-                          onChange={(e) => toggleColorGroup(colorName, e.target.checked)}
-                          className="w-4 h-4 rounded border-slate-700 text-brand-500 focus:ring-brand-500/20 bg-slate-800 cursor-pointer"
-                        />
-                        <span>🎨 Phôi Màu: <strong className="text-brand-400">{formatColorName(colorName)}</strong></span>
-                        <span className="text-[11px] font-normal text-slate-400">({colorVariants.length} size)</span>
-                      </label>
+            {/* Media Upload */}
+            <div className="space-y-2 pt-1 border-t border-slate-800">
+              <div className="space-y-1">
+                <label className="block text-[10px] font-medium text-slate-300">
+                  Album ảnh ({images.length}) & Video
+                </label>
+                <div className="flex flex-wrap gap-1.5 items-center">
+                  {images.map((img, idx) => (
+                    <div
+                      key={idx}
+                      className="relative w-8 h-8 rounded-md bg-slate-800 border border-slate-700 overflow-hidden group shrink-0"
+                    >
+                      <img src={img} alt="" className="w-full h-full object-contain" />
                       <button
                         type="button"
-                        onClick={() => toggleColorGroup(colorName, !isAllColorSelected)}
-                        className="text-[11px] text-brand-400 hover:underline font-medium"
+                        onClick={() => removeImage(idx)}
+                        className="absolute top-0 right-0 p-0.5 rounded-full bg-rose-500 text-white opacity-0 group-hover:opacity-100"
                       >
-                        {isAllColorSelected ? "Bỏ chọn màu này" : "Chọn màu này"}
+                        <X size={8} />
                       </button>
                     </div>
+                  ))}
 
-                    {/* Danh sách size thuộc phôi màu này */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {colorVariants.map((v) => (
-                        <div
-                          key={v.blank_id}
-                          className={`flex items-center justify-between p-2 rounded-lg border transition-colors ${
-                            v.selected ? "bg-brand-500/10 border-brand-500/30" : "bg-slate-900/40 border-slate-800/60 opacity-60"
-                          }`}
-                        >
-                          <label className="flex items-center gap-2 cursor-pointer text-xs min-w-0">
-                            <input
-                              type="checkbox"
-                              checked={v.selected}
-                              onChange={() => toggleVariantItem(v.blank_id)}
-                              className="w-3.5 h-3.5 rounded border-slate-700 text-brand-500 focus:ring-brand-500/20 bg-slate-800 cursor-pointer"
-                            />
-                            <span className="font-mono text-slate-300 truncate">{v.size}</span>
-                            <span className="text-[10px] text-slate-500">({formatCurrency(v.blank_price)})</span>
-                          </label>
+                  <label className="w-8 h-8 rounded-md border border-dashed border-slate-700 hover:border-brand-500 bg-slate-800/40 flex flex-col items-center justify-center text-slate-400 hover:text-brand-400 cursor-pointer shrink-0">
+                    <Upload size={11} />
+                    <input type="file" accept="image/*" multiple onChange={handleImageUpload} className="hidden" />
+                  </label>
 
-                          <div className="flex items-center gap-1">
-                            <span className="text-[10px] text-slate-400">Giá:</span>
-                            <input
-                              type="number"
-                              value={v.price}
-                              onChange={(e) => updateVariantPrice(v.blank_id, e.target.value)}
-                              className="w-20 px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-right text-xs text-slate-100 font-bold focus:border-brand-500 outline-none"
-                            />
-                          </div>
-                        </div>
-                      ))}
-                    </div>
+                  <div className="flex-1 flex gap-1 min-w-[120px]">
+                    <input
+                      type="text"
+                      value={imageUrlInput}
+                      onChange={(e) => setImageUrlInput(e.target.value)}
+                      placeholder="Dán URL ảnh..."
+                      className="flex-1 px-2 py-1 rounded border border-slate-700 bg-slate-800 text-[11px] text-slate-200 outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={addImageUrl}
+                      className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-[10px] font-medium text-slate-200 border border-slate-700 shrink-0"
+                    >
+                      +
+                    </button>
                   </div>
-                );
-              })}
+                </div>
+              </div>
+
+              <div className="flex gap-1.5 items-center">
+                <input
+                  type="text"
+                  value={videoUrl}
+                  onChange={(e) => setVideoUrl(e.target.value)}
+                  placeholder="URL video (.mp4, youtube...)"
+                  className="flex-1 px-2 py-1 rounded border border-slate-700 bg-slate-800 text-[11px] text-slate-200 outline-none"
+                />
+                <label className="px-2 py-1 rounded border border-slate-700 bg-slate-800 hover:bg-slate-700 text-[10px] font-medium text-slate-300 cursor-pointer flex items-center gap-1 shrink-0">
+                  <Video size={11} /> Video
+                  <input type="file" accept="video/*" onChange={handleVideoUpload} className="hidden" />
+                </label>
+              </div>
             </div>
-          )}
+            {uploadingMedia && (
+              <p className="text-[10px] text-brand-400 flex items-center gap-1">
+                <Loader2 size={11} className="animate-spin" /> Đang tải file...
+              </p>
+            )}
+          </div>
         </div>
 
-        {error && <p className="text-xs text-rose-400 font-medium px-1">{error}</p>}
+        {/* CỘT PHẢI (5/12): DANH SÁCH BIẾN THỂ TỰ ĐỘNG & NÚT TẠO */}
+        <div className="lg:col-span-5 p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2 flex flex-col justify-between shadow-md">
+          <div className="space-y-2 flex-1 flex flex-col">
+            {/* Header Cột Phải */}
+            <div className="flex items-center justify-between gap-1 pb-1.5 border-b border-slate-800">
+              <div className="flex items-center gap-1">
+                <Layers size={13} className="text-brand-400 shrink-0" />
+                <h4 className="text-[11px] font-bold text-slate-200 uppercase tracking-wide">
+                  2. Biến thể ({variantItems.length})
+                </h4>
+              </div>
+              {variantItems.length > 0 && (
+                <div className="flex items-center gap-1.5 text-[10px]">
+                  <span className="text-slate-400">
+                    Đã chọn: <strong className="text-brand-400">{selectedCount}</strong>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => toggleAllVariants(true)}
+                    className="text-brand-400 hover:underline font-medium"
+                  >
+                    Tất cả
+                  </button>
+                  <span className="text-slate-600">|</span>
+                  <button
+                    type="button"
+                    onClick={() => toggleAllVariants(false)}
+                    className="text-slate-400 hover:underline"
+                  >
+                    Bỏ
+                  </button>
+                </div>
+              )}
+            </div>
 
-        {/* Modal footer buttons */}
-        <div className="flex gap-2 pt-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex-1 py-2.5 rounded-xl border border-slate-700 text-slate-300 text-xs sm:text-sm font-medium hover:bg-slate-800"
-          >
-            Hủy
-          </button>
-          <button
-            type="button"
-            onClick={handleCreateMasterProduct}
-            disabled={saving || selectedCount === 0}
-            className="flex-1 py-2.5 rounded-xl bg-brand-500 text-white text-xs sm:text-sm font-semibold hover:bg-brand-600 flex items-center justify-center gap-2 disabled:opacity-50"
-          >
-            {saving && <Loader2 size={16} className="animate-spin" />}
-            Tạo {selectedCount > 0 ? `${selectedCount} ` : ""}Sản Phẩm & Biến Thể
-          </button>
+            {/* Danh sách biến thể scrollable */}
+            <div className="flex-1 max-h-[340px] overflow-y-auto pr-1 custom-scrollbar space-y-1.5">
+              {!blankTypeId || !printDesignId ? (
+                <div className="py-8 text-center text-xs text-slate-500 border border-dashed border-slate-800 rounded-xl px-2 space-y-1">
+                  <Sparkles size={18} className="mx-auto text-slate-600 animate-pulse" />
+                  <p className="font-medium text-slate-400 text-[11px]">Chưa chọn Phôi & Hình in</p>
+                  <p className="text-[10px] text-slate-500">Chọn bên trái để sinh biến thể.</p>
+                </div>
+              ) : variantItems.length === 0 ? (
+                <div className="py-4 text-center text-xs text-amber-400/90 border border-dashed border-amber-500/20 bg-amber-500/5 rounded-xl px-2">
+                  Chưa có phôi màu & size thuộc loại này.
+                </div>
+              ) : (
+                Object.entries(
+                  variantItems.reduce<Record<string, VariantSelectionItem[]>>((acc, v) => {
+                    if (!acc[v.color]) acc[v.color] = [];
+                    acc[v.color].push(v);
+                    return acc;
+                  }, {})
+                ).map(([colorName, colorVariants]) => {
+                  const isAllColorSelected = colorVariants.every((cv) => cv.selected);
+                  const isSomeColorSelected = colorVariants.some((cv) => cv.selected);
+
+                  return (
+                    <div key={colorName} className="rounded-lg bg-slate-900/90 border border-slate-800 p-2 space-y-1">
+                      {/* Header chọn cả Phôi Màu */}
+                      <div className="flex items-center justify-between border-b border-slate-800/60 pb-1">
+                        <label className="flex items-center gap-1.5 cursor-pointer font-semibold text-[11px] text-slate-200">
+                          <input
+                            type="checkbox"
+                            checked={isAllColorSelected}
+                            ref={(input) => {
+                              if (input) input.indeterminate = isSomeColorSelected && !isAllColorSelected;
+                            }}
+                            onChange={(e) => toggleColorGroup(colorName, e.target.checked)}
+                            className="w-3 h-3 rounded border-slate-700 text-brand-500 focus:ring-brand-500/20 bg-slate-800 cursor-pointer"
+                          />
+                          <span>🎨 <strong className="text-brand-400">{formatColorName(colorName)}</strong></span>
+                          <span className="text-[9px] font-normal text-slate-400">({colorVariants.length})</span>
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => toggleColorGroup(colorName, !isAllColorSelected)}
+                          className="text-[10px] text-brand-400 hover:underline"
+                        >
+                          {isAllColorSelected ? "Bỏ" : "Chọn"}
+                        </button>
+                      </div>
+
+                      {/* Danh sách size thuộc phôi màu này */}
+                      <div className="space-y-1">
+                        {colorVariants.map((v) => (
+                          <div
+                            key={v.blank_id}
+                            className={`flex items-center justify-between px-2 py-1 rounded border transition-colors ${
+                              v.selected
+                                ? "bg-brand-500/10 border-brand-500/30"
+                                : "bg-slate-950/40 border-slate-800/60 opacity-60"
+                            }`}
+                          >
+                            <label className="flex items-center gap-1.5 cursor-pointer text-[11px] min-w-0">
+                              <input
+                                type="checkbox"
+                                checked={v.selected}
+                                onChange={() => toggleVariantItem(v.blank_id)}
+                                className="w-3 h-3 rounded border-slate-700 text-brand-500 focus:ring-brand-500/20 bg-slate-800 cursor-pointer"
+                              />
+                              <span className="font-bold text-slate-200">{v.size}</span>
+                              <span className="text-[9px] text-slate-500">({formatCurrency(v.blank_price)})</span>
+                            </label>
+
+                            <div className="flex items-center gap-1 shrink-0 ml-1">
+                              <input
+                                type="number"
+                                value={v.price}
+                                onChange={(e) => updateVariantPrice(v.blank_id, e.target.value)}
+                                className="w-16 px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-right text-[11px] text-slate-100 font-bold focus:border-brand-500 outline-none"
+                              />
+                              <span className="text-[9px] text-slate-400">đ</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+
+          {error && <p className="text-xs text-rose-400 font-semibold px-1">{error}</p>}
+
+          {/* Modal footer buttons */}
+          <div className="flex gap-2 pt-2 border-t border-slate-800">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 py-2 rounded-lg border border-slate-700 text-slate-300 text-xs font-semibold hover:bg-slate-800 transition-colors"
+            >
+              Hủy
+            </button>
+            <button
+              type="button"
+              onClick={handleCreateMasterProduct}
+              disabled={saving || selectedCount === 0}
+              className="flex-2 py-2 rounded-lg bg-gradient-to-r from-brand-500 to-indigo-600 hover:from-brand-600 hover:to-indigo-700 text-white text-xs font-bold shadow-md shadow-brand-500/20 flex items-center justify-center gap-1.5 disabled:opacity-50 transition-all cursor-pointer"
+            >
+              {saving ? (
+                <>
+                  <Loader2 size={14} className="animate-spin" /> Đang tạo...
+                </>
+              ) : (
+                <>
+                  <Sparkles size={14} /> Tạo ({selectedCount}) SP
+                </>
+              )}
+            </button>
+          </div>
         </div>
       </div>
     </Modal>

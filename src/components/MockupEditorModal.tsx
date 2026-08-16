@@ -19,6 +19,8 @@ import {
   Layers,
   ShieldCheck,
   X,
+  Copy,
+  ClipboardCheck,
 } from "lucide-react";
 import { uploadFile } from "@/lib/helpers";
 import type { PrintPositionData, LogoItem } from "@/lib/types";
@@ -39,6 +41,7 @@ interface MockupEditorModalProps {
   printDesigns?: PrintDesignItem[]; // Cho 1 đến 3 hình in mới
   availableLogos?: LogoItem[]; // Danh sách Logo thương hiệu
   masterCode?: string;
+  hasOtherColors?: boolean; // Có nhiều hơn 1 phôi màu trong nhóm SP
   initialPosition?: PrintPositionData;
   initialPositions?: Record<string, PrintPositionData>;
   initialImageType?: "front" | "combined" | string;
@@ -46,7 +49,9 @@ interface MockupEditorModalProps {
     imageUrl: string,
     position: PrintPositionData,
     imageType: string,
-    positions?: Record<string, PrintPositionData>
+    positions?: Record<string, PrintPositionData>,
+    applyToAllColors?: boolean,
+    activeDesigns?: PrintDesignItem[]
   ) => Promise<void> | void;
 }
 
@@ -59,6 +64,7 @@ export function MockupEditorModal({
   printDesigns,
   availableLogos = [],
   masterCode = "SP",
+  hasOtherColors = false,
   initialPosition = { posX: 50, posY: 38, scale: 45, visible: true },
   initialPositions,
   initialImageType = "front",
@@ -110,6 +116,55 @@ export function MockupEditorModal({
   const [rendering, setRendering] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [zoomPreviewUrl, setZoomPreviewUrl] = useState<string | null>(null);
+
+  const [applyToAllColors, setApplyToAllColors] = useState<boolean>(true);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  function showToast(msg: string) {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 2500);
+  }
+
+  function handleCopyPosition() {
+    if (!activeDesignId) return;
+    const current = designPositions[activeDesignId] || { posX: 50, posY: 38, scale: 45, visible: true };
+    const payload = {
+      singlePosition: current,
+      allPositions: designPositions,
+      imageType,
+      timestamp: Date.now(),
+    };
+    localStorage.setItem("copied_print_position_data", JSON.stringify(payload));
+    showToast("Đã sao chép vị trí hình in!");
+  }
+
+  function handlePastePosition() {
+    try {
+      const raw = localStorage.getItem("copied_print_position_data");
+      if (!raw) {
+        alert("Chưa có vị trí hình in nào được sao chép.");
+        return;
+      }
+      const data = JSON.parse(raw);
+      if (data.singlePosition && activeDesignId) {
+        setDesignPositions((prev) => ({
+          ...prev,
+          [activeDesignId]: {
+            ...(prev[activeDesignId] || { posX: 50, posY: 38, scale: 45, visible: true }),
+            posX: data.singlePosition.posX,
+            posY: data.singlePosition.posY,
+            scale: data.singlePosition.scale,
+          },
+        }));
+        if (data.imageType && data.imageType !== imageType) {
+          setImageType(data.imageType);
+        }
+        showToast("Đã dán vị trí hình in!");
+      }
+    } catch (err) {
+      alert("Không thể dán vị trí: " + (err as Error).message);
+    }
+  }
 
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -181,9 +236,17 @@ export function MockupEditorModal({
       const posMap: Record<string, PrintPositionData> = {};
 
       // Kiểm tra xem đã từng bật ghép Logo trước đó chưa
-      if (initialPositions && initialPositions["logo"] && initialPositions["logo"].visible !== false) {
+      const logoPos = initialPositions?.["logo"];
+      if (logoPos && logoPos.visible !== false) {
         setEnableLogo(true);
-        if (availableLogos.length > 0) {
+        const savedLogoId = (logoPos as unknown as { logoId?: string; logoUrl?: string }).logoId;
+        const savedLogoUrl = (logoPos as unknown as { logoId?: string; logoUrl?: string }).logoUrl;
+        const matchedLogo = availableLogos.find(
+          (l) => l.id === savedLogoId || (savedLogoUrl && l.image_url === savedLogoUrl)
+        );
+        if (matchedLogo) {
+          setSelectedLogoId(matchedLogo.id);
+        } else if (availableLogos.length > 0) {
           setSelectedLogoId(availableLogos[0].id);
         }
       } else {
@@ -196,13 +259,39 @@ export function MockupEditorModal({
       normalizedDesigns.forEach((d, idx) => {
         if (initialPositions && initialPositions[d.id]) {
           posMap[d.id] = { ...initialPositions[d.id] };
-        } else if (idx === 0 && initialPosition) {
-          posMap[d.id] = { ...initialPosition };
         } else if (d.id === "logo") {
-          // Vị trí ngực trái mặc định cho Logo
-          posMap[d.id] = { posX: 38, posY: 28, scale: 16, visible: true };
+          if (initialPositions && initialPositions["logo"]) {
+            posMap[d.id] = { ...initialPositions["logo"] };
+          } else {
+            posMap[d.id] = {
+              posX: type === "combined" ? 21 : 38,
+              posY: 28,
+              scale: 16,
+              visible: true,
+              logoId: selectedLogo?.id,
+              logoUrl: selectedLogo?.image_url,
+            };
+          }
+        } else if (idx === 0) {
+          if (initialPosition) {
+            posMap[d.id] = { ...initialPosition };
+          } else if (initialPositions) {
+            const firstNonLogo = Object.entries(initialPositions).find(([k]) => k !== "logo");
+            if (firstNonLogo) {
+              posMap[d.id] = { ...firstNonLogo[1] };
+            }
+          }
+        } else if (initialPositions) {
+          const nonLogoEntries = Object.entries(initialPositions).filter(([k]) => k !== "logo");
+          if (nonLogoEntries[idx]) {
+            posMap[d.id] = { ...nonLogoEntries[idx][1] };
+          } else {
+            const defaultX = type === "combined" ? (idx === 1 ? 72 : 28) : idx === 1 ? 38 : 50;
+            const defaultY = idx === 2 ? 65 : 38;
+            const defaultS = type === "combined" ? 35 : idx === 1 ? 25 : 45;
+            posMap[d.id] = { posX: defaultX, posY: defaultY, scale: defaultS, visible: true };
+          }
         } else {
-          // Vị trí mặc định thông minh cho các hình in tiếp theo
           const defaultX = type === "combined" ? (idx === 1 ? 72 : 28) : idx === 1 ? 38 : 50;
           const defaultY = idx === 2 ? 65 : 38;
           const defaultS = type === "combined" ? 35 : idx === 1 ? 25 : 45;
@@ -459,6 +548,15 @@ export function MockupEditorModal({
       const uploadedUrl = await uploadFile(file, "products/mockups", `MOCKUP_${masterCode}`);
 
       if (uploadedUrl) {
+        const finalPositionsMap = { ...designPositions };
+        if (enableLogo && selectedLogo) {
+          finalPositionsMap["logo"] = {
+            ...(designPositions["logo"] || { posX: 38, posY: 28, scale: 16, visible: true }),
+            logoId: selectedLogo.id,
+            logoUrl: selectedLogo.image_url,
+          } as PrintPositionData;
+        }
+
         // Gửi thông số vị trí sang Node.js Server (renderimage) ghép file HD 300DPI
         notifyNodeJsRenderServer({
           masterCode,
@@ -466,18 +564,18 @@ export function MockupEditorModal({
           printDesigns: normalizedDesigns.map((d) => ({
             id: d.id,
             url: d.url,
-            position: designPositions[d.id],
+            position: finalPositionsMap[d.id] || designPositions[d.id],
           })),
           imageType,
         }).catch(() => {});
 
-        const primaryPos = designPositions[normalizedDesigns[0]?.id || "main"] || {
+        const primaryPos = finalPositionsMap[normalizedDesigns[0]?.id || "main"] || designPositions[normalizedDesigns[0]?.id || "main"] || {
           posX,
           posY,
           scale,
         };
 
-        await onSaveMockup(uploadedUrl, primaryPos, imageType, designPositions);
+        await onSaveMockup(uploadedUrl, primaryPos, imageType, finalPositionsMap, applyToAllColors, normalizedDesigns);
         setSavedSuccess(true);
         setTimeout(() => {
           setSavedSuccess(false);
@@ -582,20 +680,39 @@ export function MockupEditorModal({
                 </button>
 
                 {enableLogo && (
-                  <select
-                    value={selectedLogoId}
-                    onChange={(e) => {
-                      setSelectedLogoId(e.target.value);
-                      setActiveDesignId("logo");
-                    }}
-                    className="px-2.5 py-1 rounded-lg border border-slate-700 bg-slate-900 text-slate-100 text-xs outline-none focus:border-emerald-500"
-                  >
-                    {availableLogos.map((l) => (
-                      <option key={l.id} value={l.id}>
-                        {l.code} — {l.name}
-                      </option>
-                    ))}
-                  </select>
+                  <div className="flex items-center gap-1.5">
+                    {selectedLogo && (
+                      <div className="w-7 h-7 rounded bg-slate-950 border border-slate-700 p-0.5 flex items-center justify-center shrink-0" title={`Logo: ${selectedLogo.name}`}>
+                        <img src={selectedLogo.image_url} alt="" className="w-full h-full object-contain" />
+                      </div>
+                    )}
+                    <select
+                      value={selectedLogoId}
+                      onChange={(e) => {
+                        const newLogoId = e.target.value;
+                        setSelectedLogoId(newLogoId);
+                        const matched = availableLogos.find((l) => l.id === newLogoId);
+                        if (matched) {
+                          setDesignPositions((prev) => ({
+                            ...prev,
+                            logo: {
+                              ...(prev["logo"] || { posX: 38, posY: 28, scale: 16, visible: true }),
+                              logoId: matched.id,
+                              logoUrl: matched.image_url,
+                            },
+                          }));
+                        }
+                        setActiveDesignId("logo");
+                      }}
+                      className="px-2.5 py-1 rounded-lg border border-slate-700 bg-slate-900 text-slate-100 text-xs outline-none focus:border-emerald-500 max-w-[180px] truncate"
+                    >
+                      {availableLogos.map((l) => (
+                        <option key={l.id} value={l.id}>
+                          {l.code} — {l.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 )}
               </div>
             </div>
@@ -675,16 +792,32 @@ export function MockupEditorModal({
               <span className="text-[11px] sm:text-xs text-slate-400 flex items-center gap-1">
                 <Move size={13} className="text-brand-400" /> Kéo chuột di chuyển hoặc kéo 4 góc để co giãn
               </span>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <button
+                  type="button"
+                  onClick={handleCopyPosition}
+                  className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-medium flex items-center gap-1 transition-colors"
+                  title="Sao chép thông số vị trí (X, Y, Scale) hiện tại"
+                >
+                  <Copy size={12} className="text-amber-400" /> Copy vị trí
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePastePosition}
+                  className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-medium flex items-center gap-1 transition-colors"
+                  title="Dán vị trí đã sao chép"
+                >
+                  <ClipboardCheck size={12} className="text-emerald-400" /> Dán vị trí
+                </button>
                 <button
                   type="button"
                   onClick={handleOpenZoomPreview}
-                  className="px-2.5 py-1 rounded-lg bg-brand-500/10 hover:bg-brand-500/20 text-brand-400 border border-brand-500/30 text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-sm"
+                  className="px-2 py-1 rounded-lg bg-brand-500/10 hover:bg-brand-500/20 text-brand-400 border border-brand-500/30 text-xs font-semibold flex items-center gap-1 transition-colors shadow-sm"
                   title="Tạo ảnh xem trước HD và soi phóng to chi tiết"
                 >
-                  <Eye size={13} /> 🔍 Phóng to HD
+                  <Eye size={12} /> 🔍 HD
                 </button>
-                <span className="text-[11px] sm:text-xs font-mono text-brand-400 font-bold">
+                <span className="text-[11px] font-mono text-brand-400 font-bold ml-1">
                   X:{Math.round(posX)}% Y:{Math.round(posY)}% S:{Math.round(scale)}%
                 </span>
               </div>
@@ -695,6 +828,13 @@ export function MockupEditorModal({
               onWheel={handleWheel}
               className="relative aspect-square w-full max-w-[360px] sm:max-w-[400px] mx-auto rounded-2xl bg-slate-900 border-2 border-slate-700/80 overflow-hidden flex items-center justify-center shadow-xl touch-none"
             >
+              {/* Toast Thông Báo Nổi (Floating Notification Toast) */}
+              {toastMessage && (
+                <div className="absolute top-3 z-50 px-3.5 py-1.5 rounded-full bg-emerald-500 text-slate-950 text-xs font-bold shadow-lg animate-fade-in flex items-center gap-1.5 border border-emerald-300">
+                  <Check size={14} /> {toastMessage}
+                </div>
+              )}
+
               {/* Ảnh Phôi Nền */}
               {activeBlankImage ? (
                 <img src={activeBlankImage} alt="Blank" className="w-full h-full object-contain pointer-events-none" />
@@ -884,7 +1024,18 @@ export function MockupEditorModal({
               </div>
             </div>
 
-            <div className="pt-4 border-t border-slate-800 space-y-2">
+            <div className="pt-3 border-t border-slate-800 space-y-2.5">
+              {hasOtherColors && (
+                <label className="flex items-center gap-2 p-2 rounded-xl bg-brand-500/10 border border-brand-500/30 text-xs font-semibold text-brand-300 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={applyToAllColors}
+                    onChange={(e) => setApplyToAllColors(e.target.checked)}
+                    className="w-4 h-4 rounded accent-brand-500 cursor-pointer"
+                  />
+                  <span>✨ Đồng bộ vị trí cho TẤT CẢ các phôi màu</span>
+                </label>
+              )}
               <button
                 type="button"
                 onClick={handleExportAndSave}
