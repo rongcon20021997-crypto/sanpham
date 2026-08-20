@@ -37,6 +37,7 @@ export function QuickCreateModal({
   const [selectedLogoId, setSelectedLogoId] = useState<string>("");
 
   const [searchDesign, setSearchDesign] = useState<string>("");
+  const [filterDesignSide, setFilterDesignSide] = useState<"all" | "front" | "back">("all");
   const [searchType, setSearchType] = useState<string>("");
 
   const [hideCreatedDesigns, setHideCreatedDesigns] = useState<boolean>(true);
@@ -59,6 +60,7 @@ export function QuickCreateModal({
       setSearchDesign("");
       setSearchType("");
       setHideCreatedDesigns(true);
+      setFilterDesignSide("all");
     }
   }, [open, types, logos]);
 
@@ -233,7 +235,7 @@ export function QuickCreateModal({
     );
   }, [types, searchType]);
 
-  // Lọc danh sách hình in theo từ khóa và theo bộ lọc ẩn hình in đã tạo
+  // Lọc danh sách hình in theo từ khóa, vị trí in và theo bộ lọc ẩn hình in đã tạo
   const filteredDesigns = useMemo(() => {
     return designs.filter((d) => {
       const matchesSearch =
@@ -243,6 +245,10 @@ export function QuickCreateModal({
 
       if (!matchesSearch) return false;
 
+      // Lọc theo vị trí in mặt trước / mặt sau
+      if (filterDesignSide === "front" && d.is_back) return false;
+      if (filterDesignSide === "back" && !d.is_back) return false;
+
       // Ẩn các hình in đã từng tạo với phôi được chọn
       if (hideCreatedDesigns && existingDesignIdsForSelectedType.has(d.id)) {
         return false;
@@ -250,7 +256,7 @@ export function QuickCreateModal({
 
       return true;
     });
-  }, [designs, searchDesign, hideCreatedDesigns, existingDesignIdsForSelectedType]);
+  }, [designs, searchDesign, filterDesignSide, hideCreatedDesigns, existingDesignIdsForSelectedType]);
 
   const availableBlanks = useMemo(() => {
     if (!selectedTypeId) return [];
@@ -458,6 +464,43 @@ export function QuickCreateModal({
             </div>
 
             <SearchInput value={searchDesign} onChange={setSearchDesign} placeholder="Tìm mã, tên hình in..." />
+
+            {/* Tabs lọc vị trí in nhanh */}
+            <div className="flex items-center gap-1 p-0.5 bg-slate-950 rounded-lg border border-slate-800 text-[10px]">
+              <button
+                type="button"
+                onClick={() => setFilterDesignSide("all")}
+                className={`flex-1 py-1 rounded font-medium transition-all ${
+                  filterDesignSide === "all"
+                    ? "bg-brand-500 text-white font-bold"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                Tất cả
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilterDesignSide("front")}
+                className={`flex-1 py-1 rounded font-medium transition-all ${
+                  filterDesignSide === "front"
+                    ? "bg-sky-500 text-white font-bold"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                👕 Trước
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilterDesignSide("back")}
+                className={`flex-1 py-1 rounded font-medium transition-all ${
+                  filterDesignSide === "back"
+                    ? "bg-amber-500 text-slate-950 font-bold"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                🔙 Sau
+              </button>
+            </div>
 
             {/* Checkbox ẩn/hiện hình in đã tạo */}
             {selectedTypeId && hiddenDesignsCount > 0 && (

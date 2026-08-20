@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { supabase } from "@/lib/supabase";
 import type { PrintDesign, Theme } from "@/lib/types";
 import { PageHeader, SearchInput, EmptyState } from "@/components/PageParts";
@@ -6,7 +6,20 @@ import { Modal } from "@/components/Modal";
 import { Field, Select } from "@/components/Field";
 import { ImageUpload } from "@/components/ImageUpload";
 import { ImageCropperModal } from "@/components/ImageCropperModal";
-import { Plus, Pencil, Trash2, Loader2, Image as ImageIcon, Tag, X, Crop, Check } from "lucide-react";
+import {
+  Plus,
+  Pencil,
+  Trash2,
+  Loader2,
+  Image as ImageIcon,
+  Tag,
+  X,
+  Crop,
+  Check,
+  Filter,
+  ArrowUpDown,
+  RotateCcw,
+} from "lucide-react";
 
 export function PrintDesignsPage() {
   const [items, setItems] = useState<PrintDesign[]>([]);
@@ -14,7 +27,11 @@ export function PrintDesignsPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [filterTheme, setFilterTheme] = useState("");
-  const [filterSide, setFilterSide] = useState<string>("all"); // "all" | "front" | "back"
+  const [filterSide, setFilterSide] = useState<"all" | "front" | "back">("all");
+  const [filterTag, setFilterTag] = useState("");
+  const [filterMedia, setFilterMedia] = useState<"all" | "has_png" | "no_png">("all");
+  const [sortBy, setSortBy] = useState<"newest" | "oldest" | "name_asc" | "name_desc" | "code_asc">("newest");
+
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<PrintDesign | null>(null);
   const [croppingItem, setCroppingItem] = useState<PrintDesign | null>(null);
@@ -46,6 +63,25 @@ export function PrintDesignsPage() {
   useEffect(() => {
     load();
   }, []);
+
+  // Danh sách tất cả các tag duy nhất
+  const allTags = useMemo(() => {
+    const set = new Set<string>();
+    items.forEach((i) => {
+      if (Array.isArray(i.tags)) {
+        i.tags.forEach((t) => t && set.add(t.trim()));
+      }
+    });
+    return Array.from(set).sort();
+  }, [items]);
+
+  // Đếm số lượng theo vị trí in
+  const counts = useMemo(() => {
+    const total = items.length;
+    const back = items.filter((i) => Boolean(i.is_back)).length;
+    const front = total - back;
+    return { total, front, back };
+  }, [items]);
 
   function openCreate() {
     setEditing(null);
@@ -172,62 +208,276 @@ export function PrintDesignsPage() {
     await load();
   }
 
-  const filtered = items.filter((i) => {
-    const matchSearch =
-      i.code.toLowerCase().includes(search.toLowerCase()) ||
-      i.name.toLowerCase().includes(search.toLowerCase()) ||
-      (i.tags || []).some((t) => t.toLowerCase().includes(search.toLowerCase()));
-    const matchTheme = !filterTheme || i.theme === filterTheme;
-    const matchSide =
-      filterSide === "all" ||
-      (filterSide === "back" && Boolean(i.is_back)) ||
-      (filterSide === "front" && !i.is_back);
-    return matchSearch && matchTheme && matchSide;
-  });
+  function resetFilters() {
+    setSearch("");
+    setFilterTheme("");
+    setFilterSide("all");
+    setFilterTag("");
+    setFilterMedia("all");
+    setSortBy("newest");
+  }
+
+  const hasActiveFilters = Boolean(
+    search || filterTheme || filterSide !== "all" || filterTag || filterMedia !== "all" || sortBy !== "newest"
+  );
+
+  const filtered = useMemo(() => {
+    return items
+      .filter((i) => {
+        const matchSearch =
+          !search ||
+          i.code.toLowerCase().includes(search.toLowerCase()) ||
+          i.name.toLowerCase().includes(search.toLowerCase()) ||
+          (i.tags || []).some((t) => t.toLowerCase().includes(search.toLowerCase()));
+        const matchTheme = !filterTheme || i.theme === filterTheme;
+        const matchSide =
+          filterSide === "all" ||
+          (filterSide === "back" && Boolean(i.is_back)) ||
+          (filterSide === "front" && !i.is_back);
+        const matchTag = !filterTag || (i.tags || []).includes(filterTag);
+        const matchMedia =
+          filterMedia === "all" ||
+          (filterMedia === "has_png" && Boolean(i.png_url || i.thumbnail_url)) ||
+          (filterMedia === "no_png" && !i.png_url && !i.thumbnail_url);
+
+        return matchSearch && matchTheme && matchSide && matchTag && matchMedia;
+      })
+      .sort((a, b) => {
+        if (sortBy === "newest") {
+          return new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime();
+        }
+        if (sortBy === "oldest") {
+          return new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime();
+        }
+        if (sortBy === "name_asc") {
+          return a.name.localeCompare(b.name);
+        }
+        if (sortBy === "name_desc") {
+          return b.name.localeCompare(a.name);
+        }
+        if (sortBy === "code_asc") {
+          return a.code.localeCompare(b.code);
+        }
+        return 0;
+      });
+  }, [items, search, filterTheme, filterSide, filterTag, filterMedia, sortBy]);
 
   return (
-    <div className="animate-fade-in">
+    <div className="animate-fade-in space-y-4">
       <PageHeader
         title="Hình in"
         subtitle="Quản lý hình in (file PNG nền trong, vị trí in trước/sau, thumbnail, tag)"
         actions={
-          <>
-            <Select
-              label=""
-              value={filterSide}
-              onChange={setFilterSide}
-              options={[
-                { value: "all", label: "Tất cả vị trí" },
-                { value: "front", label: "👕 Chỉ mặt trước" },
-                { value: "back", label: "🔙 Chỉ mặt sau (In sau)" },
-              ]}
-              placeholder="Vị trí in"
-            />
-            <Select
-              label=""
-              value={filterTheme}
-              onChange={setFilterTheme}
-              options={themes.map((t) => ({ value: t.name, label: t.name }))}
-              placeholder="Tất cả chủ đề"
-            />
-            <SearchInput value={search} onChange={setSearch} placeholder="Tìm hình in..." />
+          <div className="flex items-center gap-2">
+            <SearchInput value={search} onChange={setSearch} placeholder="Tìm mã, tên, tag..." />
             <button
               onClick={openCreate}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-brand-500 text-white text-sm font-medium hover:bg-brand-600 transition-colors shadow-lg shadow-brand-500/20"
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-brand-500 text-white text-sm font-medium hover:bg-brand-600 transition-colors shadow-lg shadow-brand-500/20 shrink-0"
             >
               <Plus size={18} /> Thêm
             </button>
-          </>
+          </div>
         }
       />
+
+      {/* THANH BỘ LỌC TOÀN DIỆN */}
+      <div className="p-3.5 rounded-2xl bg-slate-900/90 border border-slate-800 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          {/* 1. TABS LỌC NHANH VỊ TRÍ IN */}
+          <div className="flex items-center gap-1.5 p-1 bg-slate-950 rounded-xl border border-slate-800">
+            <button
+              type="button"
+              onClick={() => setFilterSide("all")}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                filterSide === "all"
+                  ? "bg-brand-500 text-white shadow-sm"
+                  : "text-slate-400 hover:text-slate-200"
+              }`}
+            >
+              <span>Tất cả vị trí</span>
+              <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${filterSide === "all" ? "bg-brand-600 text-white" : "bg-slate-800 text-slate-400"}`}>
+                {counts.total}
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setFilterSide("front")}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                filterSide === "front"
+                  ? "bg-sky-500 text-white shadow-sm"
+                  : "text-slate-400 hover:text-slate-200"
+              }`}
+            >
+              <span>👕 Mặt trước</span>
+              <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${filterSide === "front" ? "bg-sky-600 text-white" : "bg-slate-800 text-slate-400"}`}>
+                {counts.front}
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setFilterSide("back")}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                filterSide === "back"
+                  ? "bg-amber-500 text-slate-950 shadow-sm"
+                  : "text-slate-400 hover:text-slate-200"
+              }`}
+            >
+              <span>🔙 Mặt sau (In sau)</span>
+              <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${filterSide === "back" ? "bg-amber-600 text-slate-950" : "bg-slate-800 text-slate-400"}`}>
+                {counts.back}
+              </span>
+            </button>
+          </div>
+
+          {/* NÚT RESET LỌC */}
+          {hasActiveFilters && (
+            <button
+              type="button"
+              onClick={resetFilters}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-400 hover:text-rose-400 bg-slate-950/60 border border-slate-800 hover:border-rose-500/30 transition-colors"
+            >
+              <RotateCcw size={13} />
+              <span>Xóa bộ lọc</span>
+            </button>
+          )}
+        </div>
+
+        {/* 2. CÁC DROPDOWN BỘ LỌC CHI TIẾT */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-1 border-t border-slate-800/80">
+          {/* Lọc theo Chủ đề */}
+          <div>
+            <label className="block text-[10px] font-semibold text-slate-400 mb-1 flex items-center gap-1">
+              <Filter size={11} className="text-brand-400" /> Chủ đề
+            </label>
+            <select
+              value={filterTheme}
+              onChange={(e) => setFilterTheme(e.target.value)}
+              className="w-full px-2.5 py-1.5 rounded-lg border border-slate-700/80 bg-slate-950 text-slate-200 text-xs outline-none focus:border-brand-500 cursor-pointer"
+            >
+              <option value="">Tất cả chủ đề</option>
+              {themes.map((t) => (
+                <option key={t.id} value={t.name}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Lọc theo Tag */}
+          <div>
+            <label className="block text-[10px] font-semibold text-slate-400 mb-1 flex items-center gap-1">
+              <Tag size={11} className="text-brand-400" /> Tag
+            </label>
+            <select
+              value={filterTag}
+              onChange={(e) => setFilterTag(e.target.value)}
+              className="w-full px-2.5 py-1.5 rounded-lg border border-slate-700/80 bg-slate-950 text-slate-200 text-xs outline-none focus:border-brand-500 cursor-pointer"
+            >
+              <option value="">Tất cả Tag ({allTags.length})</option>
+              {allTags.map((tag) => (
+                <option key={tag} value={tag}>
+                  #{tag}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Lọc theo Trạng thái ảnh */}
+          <div>
+            <label className="block text-[10px] font-semibold text-slate-400 mb-1 flex items-center gap-1">
+              <ImageIcon size={11} className="text-brand-400" /> File PNG ảnh
+            </label>
+            <select
+              value={filterMedia}
+              onChange={(e) => setFilterMedia(e.target.value as "all" | "has_png" | "no_png")}
+              className="w-full px-2.5 py-1.5 rounded-lg border border-slate-700/80 bg-slate-950 text-slate-200 text-xs outline-none focus:border-brand-500 cursor-pointer"
+            >
+              <option value="all">Tất cả hình in</option>
+              <option value="has_png">✓ Đã có file PNG</option>
+              <option value="no_png">✕ Chưa có file PNG</option>
+            </select>
+          </div>
+
+          {/* Sắp xếp */}
+          <div>
+            <label className="block text-[10px] font-semibold text-slate-400 mb-1 flex items-center gap-1">
+              <ArrowUpDown size={11} className="text-brand-400" /> Sắp xếp
+            </label>
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as "newest" | "oldest" | "name_asc" | "name_desc" | "code_asc")}
+              className="w-full px-2.5 py-1.5 rounded-lg border border-slate-700/80 bg-slate-950 text-slate-200 text-xs outline-none focus:border-brand-500 cursor-pointer"
+            >
+              <option value="newest">Mới nhất trước</option>
+              <option value="oldest">Cũ nhất trước</option>
+              <option value="name_asc">Tên A → Z</option>
+              <option value="name_desc">Tên Z → A</option>
+              <option value="code_asc">Mã hình in</option>
+            </select>
+          </div>
+        </div>
+
+        {/* THÔNG TIN KẾT QUẢ & ACTIVE FILTER BADGES */}
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-[11px] text-slate-400">
+          <div className="flex items-center gap-2">
+            <span>
+              Đang hiển thị <strong className="text-slate-200">{filtered.length}</strong> / {items.length} hình in
+            </span>
+          </div>
+
+          {/* Active filter badges */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            {filterSide !== "all" && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-400 border border-amber-500/20 text-[10px]">
+                {filterSide === "back" ? "Mặt sau" : "Mặt trước"}
+                <button type="button" onClick={() => setFilterSide("all")} className="hover:text-white">
+                  <X size={10} />
+                </button>
+              </span>
+            )}
+            {filterTheme && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-violet-500/10 text-violet-400 border border-violet-500/20 text-[10px]">
+                Chủ đề: {filterTheme}
+                <button type="button" onClick={() => setFilterTheme("")} className="hover:text-white">
+                  <X size={10} />
+                </button>
+              </span>
+            )}
+            {filterTag && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-sky-500/10 text-sky-400 border border-sky-500/20 text-[10px]">
+                #{filterTag}
+                <button type="button" onClick={() => setFilterTag("")} className="hover:text-white">
+                  <X size={10} />
+                </button>
+              </span>
+            )}
+            {filterMedia !== "all" && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px]">
+                {filterMedia === "has_png" ? "Đã có PNG" : "Chưa có PNG"}
+                <button type="button" onClick={() => setFilterMedia("all")} className="hover:text-white">
+                  <X size={10} />
+                </button>
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
 
       {loading ? (
         <div className="flex justify-center py-16">
           <Loader2 className="animate-spin text-slate-600" size={32} />
         </div>
       ) : filtered.length === 0 ? (
-        <div className="card-gradient rounded-2xl border border-slate-700/50">
-          <EmptyState message="Chưa có hình in nào phù hợp. Nhấn Thêm để tạo mới." />
+        <div className="card-gradient rounded-2xl border border-slate-700/50 p-8 text-center space-y-3">
+          <EmptyState message="Không tìm thấy hình in nào phù hợp với bộ lọc." />
+          {hasActiveFilters && (
+            <button
+              onClick={resetFilters}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-800 text-slate-200 text-xs font-medium hover:bg-slate-700 transition-colors border border-slate-700"
+            >
+              <RotateCcw size={14} /> Xóa bộ lọc và hiển thị tất cả
+            </button>
+          )}
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-4">
@@ -266,7 +516,7 @@ export function PrintDesignsPage() {
                       e.stopPropagation();
                       handleToggleIsBack(item);
                     }}
-                    title={item.is_back ? "Đang áp dụng Mặt sau (Click để bỏ chọn)" : "Click để áp dụng cho Mặt sau của áo"}
+                    title={item.is_back ? "Đang áp dụng Mặt sau (Click để đổi sang Mặt trước)" : "Click để áp dụng cho Mặt sau của áo"}
                     className={`absolute top-2 right-2 flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold transition-all shadow-md z-10 ${
                       item.is_back
                         ? "bg-amber-500 text-slate-950 hover:bg-amber-400 border border-amber-400"
@@ -323,7 +573,11 @@ export function PrintDesignsPage() {
                   {item.tags && item.tags.length > 0 && (
                     <div className="flex flex-wrap gap-1 mt-1.5">
                       {item.tags.slice(0, 3).map((t) => (
-                        <span key={t} className="text-[10px] text-slate-500">
+                        <span
+                          key={t}
+                          onClick={() => setFilterTag(t)}
+                          className="text-[10px] text-slate-500 hover:text-sky-400 cursor-pointer transition-colors"
+                        >
                           #{t}
                         </span>
                       ))}
