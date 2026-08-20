@@ -23,6 +23,7 @@ import {
   ClipboardCheck,
 } from "lucide-react";
 import { uploadFile } from "@/lib/helpers";
+import { loadImageWithR2Priority } from "@/lib/r2Storage";
 import type { PrintPositionData, LogoItem } from "@/lib/types";
 
 export interface PrintDesignItem {
@@ -496,11 +497,7 @@ export function MockupEditorModal({
       const canvas = document.createElement("canvas");
       const ctx = canvas.getContext("2d");
 
-      const imgBlank = new Image();
-      imgBlank.crossOrigin = "anonymous";
-      imgBlank.src = targetBlankImage;
-
-      await new Promise((resolve) => (imgBlank.onload = resolve));
+      const imgBlank = await loadImageWithR2Priority(targetBlankImage, "blanks");
 
       canvas.width = 1200;
       canvas.height = 1200;
@@ -519,10 +516,12 @@ export function MockupEditorModal({
           };
           if (pos.visible === false) continue; // Bỏ qua không vẽ những layer bị ẨN
 
-          const imgDesign = new Image();
-          imgDesign.crossOrigin = "anonymous";
-          imgDesign.src = design.url;
-          await new Promise((resolve) => (imgDesign.onload = resolve));
+          const isLogo = design.id === "logo" || design.code?.toLowerCase().includes("logo");
+          const imgDesign = await loadImageWithR2Priority(
+            design.url,
+            isLogo ? "logos" : "designs",
+            design.code
+          );
 
           const designWidth = (pos.scale / 100) * 1200;
           const designAspect = imgDesign.height / imgDesign.width;

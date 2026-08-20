@@ -3,7 +3,7 @@ import { supabase } from "@/lib/supabase";
 import type { Product, Blank, PrintDesign, BlankType, LogoItem } from "@/lib/types";
 import { PageHeader, SearchInput, EmptyState } from "@/components/PageParts";
 import { Modal } from "@/components/Modal";
-import { ImageZoomModal } from "@/components/ImageZoomModal";
+import { ImageZoomModal, type ZoomImageItem } from "@/components/ImageZoomModal";
 import { Select } from "@/components/Field";
 import {
   Plus,
@@ -25,8 +25,13 @@ import {
   Layers,
   LayoutGrid,
   List,
+  ExternalLink,
+  RefreshCw,
+  CheckCircle2,
+  Check,
 } from "lucide-react";
 import { formatCurrency, uploadFile, formatColorName } from "@/lib/helpers";
+import { loadImageWithR2Priority } from "@/lib/r2Storage";
 
 export interface MasterProductGroup {
   key: string;
@@ -56,6 +61,7 @@ export interface ColorSubGroupItem {
 
 export interface MockupEditorTarget {
   masterCode: string;
+  masterGroupCode?: string;
   colorName: string;
   blankImageUrl: string | null;
   blankImageBackUrl?: string | null;
@@ -97,10 +103,7 @@ async function generateAndUploadMockupForBlank({
     const ctx = canvas.getContext("2d");
     if (!ctx) return null;
 
-    const imgBlank = new Image();
-    imgBlank.crossOrigin = "anonymous";
-    imgBlank.src = targetBlankImage;
-    await new Promise((resolve) => (imgBlank.onload = resolve));
+    const imgBlank = await loadImageWithR2Priority(targetBlankImage, "blanks");
 
     canvas.width = 1200;
     canvas.height = 1200;
@@ -125,10 +128,11 @@ async function generateAndUploadMockupForBlank({
         };
       if (pos.visible === false) continue;
 
-      const imgDesign = new Image();
-      imgDesign.crossOrigin = "anonymous";
-      imgDesign.src = design.url;
-      await new Promise((resolve) => (imgDesign.onload = resolve));
+      const imgDesign = await loadImageWithR2Priority(
+        design.url,
+        isLogo ? "logos" : "designs",
+        design.code
+      );
 
       const designWidth = (pos.scale / 100) * 1200;
       const designAspect = imgDesign.height / imgDesign.width;
@@ -221,7 +225,12 @@ export function ProductsPage() {
   const [editItem, setEditItem] = useState<Product | null>(null);
   const [editMasterGroup, setEditMasterGroup] = useState<MasterProductGroup | null>(null);
   const [mockupEditorTarget, setMockupEditorTarget] = useState<MockupEditorTarget | null>(null);
-  const [zoomImage, setZoomImage] = useState<{ url: string; title: string } | null>(null);
+  const [zoomImage, setZoomImage] = useState<{
+    url?: string;
+    title?: string;
+    images?: ZoomImageItem[];
+    initialIndex?: number;
+  } | null>(null);
   const [detailGroupKey, setDetailGroupKey] = useState<string | null>(null);
 
   const [editPrice, setEditPrice] = useState("");
@@ -435,6 +444,72 @@ export function ProductsPage() {
     await load();
   }
 
+  // Hàm ghép lại hình mockup HD từ Cloudflare R2 cho một Phôi Màu chỉ định
+  async function handleReRenderColorMockup(
+    group: MasterProductGroup,
+    cg: ReturnType<typeof getColorSubGroups>[0]
+  ): Promise<boolean> {
+    const list =
+      group.print_designs_list && group.print_designs_list.length > 0
+        ? group.print_designs_list
+        : group.print_design
+        ? [group.print_design]
+        : [];
+
+    const targetDesigns = list.map((d) => ({
+      id: d.id,
+      code: d.code,
+      name: d.name,
+      url: d.png_url,
+    }));
+
+    const firstVar = cg.variants[0];
+    const positionsMap = firstVar?.print_positions || null;
+    const imageType = cg.blank_image_type || "front";
+
+    const newMockupUrl = await generateAndUploadMockupForBlank({
+      masterCode: group.master_code,
+      colorName: formatColorName(cg.color),
+      blankImageUrl: cg.blank_image,
+      blankImageBackUrl: cg.blank_image_back,
+      printDesigns: targetDesigns,
+      positionsMap: positionsMap,
+      imageType: imageType,
+    });
+
+    if (newMockupUrl) {
+      const variantIds = cg.variants.map((v) => v.id);
+      await supabase
+        .from("products")
+        .update({
+          preview_url: newMockupUrl,
+        })
+        .in("id", variantIds);
+
+      await load();
+      return true;
+    }
+    return false;
+  }
+
+  // Hàm ghép lại hình mockup HD cho TẤT CẢ các phôi màu trong sản phẩm chung
+  async function handleReRenderAllColors(
+    group: MasterProductGroup,
+    onProgress?: (current: number, total: number, colorName: string) => void
+  ): Promise<{ total: number; success: number }> {
+    const colorSubGroups = getColorSubGroups(group.variants);
+    let successCount = 0;
+    for (let i = 0; i < colorSubGroups.length; i++) {
+      const cg = colorSubGroups[i];
+      if (onProgress) {
+        onProgress(i + 1, colorSubGroups.length, formatColorName(cg.color));
+      }
+      const ok = await handleReRenderColorMockup(group, cg);
+      if (ok) successCount++;
+    }
+    return { total: colorSubGroups.length, success: successCount };
+  }
+
   const hasFilters = filterType || filterColor || filterSize || filterTheme || filterStatus;
 
   return (
@@ -567,6 +642,32 @@ export function ProductsPage() {
                 : []
             ).filter((pd): pd is PrintDesign => Boolean(pd && pd.name));
 
+            const variantZoomImages: ZoomImageItem[] = colorSubGroups
+              .map((cg) => {
+                const rawBlankImage =
+                  cg.blank_image_type === "combined" && cg.blank_image_back
+                    ? cg.blank_image_back
+                    : cg.blank_image || cg.blank_image_back;
+                const imgUrl = cg.preview_url || rawBlankImage || "";
+                return {
+                  url: imgUrl,
+                  title: `${group.master_name} - Màu ${formatColorName(cg.color)}`,
+                  label: `Màu ${formatColorName(cg.color)}`,
+                  color: cg.color,
+                };
+              })
+              .filter((i) => Boolean(i.url));
+
+            if (group.images && group.images.length > 0) {
+              group.images.forEach((url, i) => {
+                variantZoomImages.push({
+                  url,
+                  title: `${group.master_name} - Album media ${i + 1}`,
+                  label: `Media ${i + 1}`,
+                });
+              });
+            }
+
             return (
               <div
                 key={group.key}
@@ -577,14 +678,16 @@ export function ProductsPage() {
                   {/* Image container */}
                   <div
                     onClick={() =>
-                      mainImage &&
+                      (mainImage || variantZoomImages.length > 0) &&
                       setZoomImage({
-                        url: mainImage,
+                        url: mainImage || variantZoomImages[0]?.url,
                         title: `Sản phẩm: ${group.master_name}`,
+                        images: variantZoomImages,
+                        initialIndex: 0,
                       })
                     }
-                    className="relative w-14 h-14 sm:w-16 sm:h-16 rounded-xl bg-slate-800/80 border border-slate-700/60 overflow-hidden shrink-0 flex items-center justify-center cursor-zoom-in group/img"
-                    title="Nhấp chuột để xem ảnh phóng to"
+                    className="relative w-14 h-14 sm:w-16 sm:h-16 rounded-xl bg-slate-800/80 border border-slate-700/60 overflow-hidden shrink-0 flex items-center justify-center cursor-zoom-in group/img shadow-sm"
+                    title="Nhấp chuột để xem toàn bộ ảnh biến thể phóng to"
                   >
                     {mainImage ? (
                       <img src={mainImage} alt="" className="w-full h-full object-contain group-hover/img:scale-105 transition-transform" />
@@ -675,6 +778,55 @@ export function ProductsPage() {
                         </span>
                       )}
                     </div>
+
+                    {/* DẢI HIỂN THỊ TOÀN BỘ ẢNH BIẾN THỂ CỦA SẢN PHẨM CHUNG */}
+                    {colorSubGroups.length > 0 && (
+                      <div className="pt-1.5 flex items-center gap-1.5 overflow-x-auto max-w-full pb-0.5 custom-scrollbar">
+                        <span className="text-[10px] font-semibold text-slate-400 shrink-0 flex items-center gap-1">
+                          🎨 Biến thể ({colorSubGroups.length}):
+                        </span>
+                        {colorSubGroups.map((cg, idx) => {
+                          const rawBlankImage =
+                            cg.blank_image_type === "combined" && cg.blank_image_back
+                              ? cg.blank_image_back
+                              : cg.blank_image || cg.blank_image_back;
+                          const colorMockupImage = cg.preview_url || rawBlankImage;
+                          if (!colorMockupImage) return null;
+
+                          return (
+                            <button
+                              key={cg.color}
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setZoomImage({
+                                  url: colorMockupImage,
+                                  title: `${group.master_name} - Màu ${formatColorName(cg.color)}`,
+                                  images: variantZoomImages,
+                                  initialIndex: idx,
+                                });
+                              }}
+                              className="group/vimg relative flex items-center gap-1 px-1.5 py-0.5 rounded-lg bg-slate-950/90 border border-slate-800 hover:border-brand-500 hover:bg-slate-800 transition-all shrink-0 cursor-zoom-in shadow-sm"
+                              title={`Bấm xem ảnh biến thể màu ${formatColorName(cg.color)} (${cg.variants.length} size)`}
+                            >
+                              <div className="w-6 h-6 rounded bg-slate-900 overflow-hidden flex items-center justify-center shrink-0 border border-slate-800/80">
+                                <img
+                                  src={colorMockupImage}
+                                  alt=""
+                                  className="w-full h-full object-contain group-hover/vimg:scale-110 transition-transform"
+                                />
+                              </div>
+                              <span className="text-[10px] font-medium text-slate-300 group-hover/vimg:text-brand-300">
+                                {formatColorName(cg.color)}
+                              </span>
+                              <span className="text-[9px] text-slate-500 font-mono">
+                                ({cg.variants.length})
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -796,6 +948,7 @@ export function ProductsPage() {
         blanks={blanks}
         designs={designs}
         types={types}
+        existingProducts={items}
         onCreated={load}
       />
 
@@ -824,6 +977,8 @@ export function ProductsPage() {
         onClose={() => setZoomImage(null)}
         imageUrl={zoomImage?.url || null}
         title={zoomImage?.title}
+        images={zoomImage?.images}
+        initialIndex={zoomImage?.initialIndex}
       />
 
       {/* Master Product Detail & Variants Modal */}
@@ -842,6 +997,8 @@ export function ProductsPage() {
           onPreviewVariant={(v) => setPreviewItem(v)}
           onOpenMockupEditor={(target) => setMockupEditorTarget(target)}
           onZoomImage={(data) => setZoomImage(data)}
+          onReRenderColor={handleReRenderColorMockup}
+          onReRenderAllColors={handleReRenderAllColors}
         />
       )}
 
@@ -915,7 +1072,7 @@ export function ProductsPage() {
 
             for (const other of otherGroups) {
               const otherMockupUrl = await generateAndUploadMockupForBlank({
-                masterCode: mockupEditorTarget.masterCode.split("-")[0] || "SP",
+                masterCode: mockupEditorTarget.masterGroupCode || mockupEditorTarget.masterCode,
                 colorName: formatColorName(other.color),
                 blankImageUrl: other.blank_image,
                 blankImageBackUrl: other.blank_image_back,
@@ -962,6 +1119,7 @@ function CreateMasterProductModal({
   blanks,
   designs,
   types,
+  existingProducts,
   onCreated,
 }: {
   open: boolean;
@@ -969,6 +1127,7 @@ function CreateMasterProductModal({
   blanks: Blank[];
   designs: PrintDesign[];
   types: BlankType[];
+  existingProducts: Product[];
   onCreated: () => void;
 }) {
   const [masterName, setMasterName] = useState("");
@@ -989,6 +1148,44 @@ function CreateMasterProductModal({
   const [error, setError] = useState<string | null>(null);
 
   const selectedBlankType = types.find((t) => t.id === blankTypeId);
+
+  // Tìm tất cả các ID hình in chính đã từng được tạo với loại phôi đang chọn
+  const usedMainDesignIdsForBlankType = useMemo(() => {
+    if (!blankTypeId) return new Set<string>();
+    const set = new Set<string>();
+    existingProducts.forEach((p) => {
+      if (!p) return;
+      const bTypeId =
+        p.blanks?.blank_type_id ||
+        p.blanks?.blank_types?.id ||
+        blanks.find((b) => b.id === p.blank_id)?.blank_type_id;
+
+      if (bTypeId === blankTypeId) {
+        if (p.print_design_id) set.add(p.print_design_id);
+        if (p.print_designs?.id) set.add(p.print_designs.id);
+        if (p.print_design_ids && p.print_design_ids.length > 0) {
+          p.print_design_ids.forEach((id) => {
+            if (id) set.add(id);
+          });
+        }
+      }
+    });
+    return set;
+  }, [blankTypeId, existingProducts, blanks]);
+
+  // Tự động bỏ chọn hình 1 nếu hình đang chọn nằm trong danh sách đã tạo với phôi này
+  useEffect(() => {
+    if (printDesignId && usedMainDesignIdsForBlankType.has(printDesignId)) {
+      setPrintDesignId("");
+    }
+  }, [blankTypeId, usedMainDesignIdsForBlankType]);
+
+  // Danh sách hình in khả dụng cho Hình in chính (Hình 1): ẩn những hình in đã từng tạo với loại phôi này
+  const availableMainDesigns = useMemo(() => {
+    if (!blankTypeId) return designs;
+    return designs.filter((d) => !usedMainDesignIdsForBlankType.has(d.id));
+  }, [designs, blankTypeId, usedMainDesignIdsForBlankType]);
+
   const selectedDesign = designs.find((d) => d.id === printDesignId);
   const selectedDesign2 = designs.find((d) => d.id === printDesignId2);
   const selectedDesign3 = designs.find((d) => d.id === printDesignId3);
@@ -996,6 +1193,27 @@ function CreateMasterProductModal({
   const selectedDesigns = [selectedDesign, selectedDesign2, selectedDesign3].filter(
     (d): d is PrintDesign => Boolean(d)
   );
+
+  // Tự động reset trắng dữ liệu cũ mỗi khi mở modal tạo sản phẩm
+  useEffect(() => {
+    if (open) {
+      setMasterName("");
+      setMasterCode("");
+      setDefaultPrice("250000");
+      setBlankTypeId("");
+      setPrintDesignId("");
+      setPrintDesignId2("");
+      setPrintDesignId3("");
+      setBlankImageType("front");
+      setImages([]);
+      setImageUrlInput("");
+      setVideoUrl("");
+      setUploadingMedia(false);
+      setVariantItems([]);
+      setSaving(false);
+      setError(null);
+    }
+  }, [open]);
 
   // Tự động gợi ý Tên & Mã sản phẩm chung khi chọn Loại phôi & các Hình in
   useEffect(() => {
@@ -1278,31 +1496,42 @@ function CreateMasterProductModal({
             </div>
 
             {/* Chọn 1 - 3 Hình In */}
-            <div className="space-y-1.5 p-2 rounded-lg bg-slate-950/60 border border-slate-800/80">
-              <label className="block text-[10px] font-semibold text-slate-300">
+            <div className="space-y-2 p-2.5 rounded-xl bg-slate-950/70 border border-slate-800/90">
+              <label className="block text-[11px] font-bold text-slate-200 uppercase tracking-wide">
                 Chọn Hình In (Tối đa 3 hình):
               </label>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 <div>
-                  <label className="block text-[10px] text-slate-400 mb-0.5">
-                    Hình 1 (Chính) <span className="text-rose-400">*</span>
-                  </label>
+                  <div className="flex items-center justify-between mb-0.5">
+                    <label className="block text-[10px] font-medium text-slate-300">
+                      Hình 1 (Chính) <span className="text-rose-400 font-bold">*</span>
+                    </label>
+                    {blankTypeId && usedMainDesignIdsForBlankType.size > 0 && (
+                      <span className="text-[9px] text-emerald-400 font-semibold">
+                        (Ẩn {usedMainDesignIdsForBlankType.size} hình đã tạo)
+                      </span>
+                    )}
+                  </div>
                   <select
                     value={printDesignId}
                     onChange={(e) => setPrintDesignId(e.target.value)}
                     className="w-full px-2 py-1.5 rounded-lg border border-slate-700 bg-slate-800 text-slate-100 text-xs outline-none focus:border-brand-500 cursor-pointer truncate"
                   >
-                    <option value="">-- Hình 1 (Bắt buộc) --</option>
-                    {designs.map((d) => (
+                    <option value="">
+                      {availableMainDesigns.length === 0
+                        ? "-- Đã tạo hết hình in với phôi này --"
+                        : "-- Chọn Hình 1 (Bắt buộc) --"}
+                    </option>
+                    {availableMainDesigns.map((d) => (
                       <option key={d.id} value={d.id}>
-                        {d.code} — {d.name} {d.is_back ? "(Mặt sau)" : ""}
+                        {d.code} — {d.name} [{d.is_back ? "Mặt sau" : "Mặt trước"}]
                       </option>
                     ))}
                   </select>
                 </div>
 
                 <div>
-                  <label className="block text-[10px] text-slate-400 mb-0.5">
+                  <label className="block text-[10px] font-medium text-slate-400 mb-0.5">
                     Hình 2 (Sau/Ngực)
                   </label>
                   <select
@@ -1313,14 +1542,14 @@ function CreateMasterProductModal({
                     <option value="">-- Không dùng --</option>
                     {designs.map((d) => (
                       <option key={d.id} value={d.id}>
-                        {d.code} — {d.name} {d.is_back ? "(Mặt sau)" : ""}
+                        {d.code} — {d.name} [{d.is_back ? "Mặt sau" : "Mặt trước"}]
                       </option>
                     ))}
                   </select>
                 </div>
 
                 <div>
-                  <label className="block text-[10px] text-slate-400 mb-0.5">
+                  <label className="block text-[10px] font-medium text-slate-400 mb-0.5">
                     Hình 3 (Tay/Cổ)
                   </label>
                   <select
@@ -1331,12 +1560,110 @@ function CreateMasterProductModal({
                     <option value="">-- Không dùng --</option>
                     {designs.map((d) => (
                       <option key={d.id} value={d.id}>
-                        {d.code} — {d.name} {d.is_back ? "(Mặt sau)" : ""}
+                        {d.code} — {d.name} [{d.is_back ? "Mặt sau" : "Mặt trước"}]
                       </option>
                     ))}
                   </select>
                 </div>
               </div>
+
+              {/* KHU VỰC XEM TRƯỚC HÌNH IN CHÍNH & CÁC HÌNH IN ĐÃ CHỌN */}
+              {selectedDesign ? (
+                <div className="p-2.5 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                      ✨ Xem trước hình in chính (Hình 1):
+                    </span>
+                    <span
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                        selectedDesign.is_back
+                          ? "bg-amber-500/20 text-amber-300 border-amber-500/40"
+                          : "bg-sky-500/20 text-sky-300 border-sky-500/40"
+                      }`}
+                    >
+                      {selectedDesign.is_back ? "🔙 Hình Mặt sau (In sau)" : "👕 Hình Mặt trước (In trước)"}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <div className="w-14 h-14 rounded-lg bg-slate-950 p-1 border border-slate-700/80 shrink-0 flex items-center justify-center overflow-hidden">
+                      {selectedDesign.thumbnail_url || selectedDesign.png_url ? (
+                        <img
+                          src={(selectedDesign.thumbnail_url || selectedDesign.png_url) as string}
+                          alt={selectedDesign.name}
+                          className="w-full h-full object-contain"
+                        />
+                      ) : (
+                        <ImageIcon size={20} className="text-slate-600" />
+                      )}
+                    </div>
+
+                    <div className="min-w-0 flex-1 space-y-0.5 text-xs">
+                      <p className="font-bold text-slate-200 truncate">{selectedDesign.name}</p>
+                      <p className="font-mono text-[10px] text-brand-400">Mã: {selectedDesign.code}</p>
+                      {selectedDesign.theme && (
+                        <p className="text-[10px] text-slate-400">
+                          Chủ đề: <span className="text-violet-300 font-medium">{selectedDesign.theme}</span>
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Xem trước hình 2 & 3 nếu có */}
+                  {(selectedDesign2 || selectedDesign3) && (
+                    <div className="pt-2 border-t border-slate-800/80 flex flex-wrap gap-2">
+                      {selectedDesign2 && (
+                        <div className="flex items-center gap-2 px-2 py-1 rounded-lg bg-slate-950/80 border border-slate-800 text-[10px]">
+                          {selectedDesign2.thumbnail_url || selectedDesign2.png_url ? (
+                            <img
+                              src={(selectedDesign2.thumbnail_url || selectedDesign2.png_url) as string}
+                              alt=""
+                              className="w-5 h-5 object-contain rounded shrink-0 bg-slate-900"
+                            />
+                          ) : null}
+                          <span className="text-slate-400 font-semibold">Hình 2:</span>
+                          <span className="font-medium text-slate-200 truncate max-w-[100px]">
+                            {selectedDesign2.name}
+                          </span>
+                          <span
+                            className={`px-1.5 py-0.2 rounded text-[9px] font-bold ${
+                              selectedDesign2.is_back ? "bg-amber-500/20 text-amber-300" : "bg-sky-500/20 text-sky-300"
+                            }`}
+                          >
+                            {selectedDesign2.is_back ? "Mặt sau" : "Mặt trước"}
+                          </span>
+                        </div>
+                      )}
+                      {selectedDesign3 && (
+                        <div className="flex items-center gap-2 px-2 py-1 rounded-lg bg-slate-950/80 border border-slate-800 text-[10px]">
+                          {selectedDesign3.thumbnail_url || selectedDesign3.png_url ? (
+                            <img
+                              src={(selectedDesign3.thumbnail_url || selectedDesign3.png_url) as string}
+                              alt=""
+                              className="w-5 h-5 object-contain rounded shrink-0 bg-slate-900"
+                            />
+                          ) : null}
+                          <span className="text-slate-400 font-semibold">Hình 3:</span>
+                          <span className="font-medium text-slate-200 truncate max-w-[100px]">
+                            {selectedDesign3.name}
+                          </span>
+                          <span
+                            className={`px-1.5 py-0.2 rounded text-[9px] font-bold ${
+                              selectedDesign3.is_back ? "bg-amber-500/20 text-amber-300" : "bg-sky-500/20 text-sky-300"
+                            }`}
+                          >
+                            {selectedDesign3.is_back ? "Mặt sau" : "Mặt trước"}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="p-2 rounded-lg border border-dashed border-slate-800 bg-slate-900/40 text-center text-[10px] text-slate-500 italic">
+                  💡 Chọn Hình 1 (Chính) để xem trước ảnh và nhận biết phân loại hình in mặt trước / mặt sau.
+                </div>
+              )}
             </div>
 
             {/* Kiểu Mockup */}
@@ -2021,6 +2348,18 @@ function ProductPreview({ product }: { product: Product }) {
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-center">
       {/* BÊN TRÁI: Ảnh Mockup Hoàn Chỉnh */}
       <div className="aspect-square w-full rounded-2xl bg-slate-900 border border-slate-700/80 overflow-hidden flex items-center justify-center relative shadow-xl">
+        {mockupImage && (
+          <a
+            href={mockupImage}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="absolute top-2.5 right-2.5 px-2.5 py-1 rounded-lg bg-slate-950/85 hover:bg-slate-950 text-brand-400 hover:text-brand-300 border border-slate-700/80 text-[11px] font-semibold flex items-center gap-1 shadow-md z-10"
+            title="Mở ảnh gốc trong tab mới để xem siêu rõ (Link R2 / HD)"
+          >
+            <ExternalLink size={12} />
+            <span>Mở link R2</span>
+          </a>
+        )}
         {mockupImage ? (
           <img src={mockupImage} alt={product.code} className="w-full h-full object-contain p-2" />
         ) : (
@@ -2066,7 +2405,6 @@ function ProductPreview({ product }: { product: Product }) {
 /* Modal Chi Tiết Sản Phẩm & Danh Sách Biến Thể Theo Phôi Màu */
 function MasterProductDetailModal({
   group,
-  logos,
   onClose,
   onEditMaster,
   onMediaMaster,
@@ -2076,9 +2414,10 @@ function MasterProductDetailModal({
   onPreviewVariant,
   onOpenMockupEditor,
   onZoomImage,
+  onReRenderColor,
+  onReRenderAllColors,
 }: {
   group: MasterProductGroup;
-  logos: LogoItem[];
   onClose: () => void;
   onEditMaster: (group: MasterProductGroup) => void;
   onMediaMaster: (group: MasterProductGroup) => void;
@@ -2087,8 +2426,17 @@ function MasterProductDetailModal({
   onDeleteVariant: (v: Product) => void;
   onPreviewVariant: (v: Product) => void;
   onOpenMockupEditor: (target: MockupEditorTarget) => void;
-  onZoomImage: (data: { url: string; title: string }) => void;
+  onZoomImage: (data: { url?: string; title?: string; images?: ZoomImageItem[]; initialIndex?: number }) => void;
+  onReRenderColor: (group: MasterProductGroup, cg: ReturnType<typeof getColorSubGroups>[0]) => Promise<boolean>;
+  onReRenderAllColors: (group: MasterProductGroup) => Promise<void>;
 }) {
+  const [reRenderingColor, setReRenderingColor] = useState<string | null>(null);
+  const [reRenderingAll, setReRenderingAll] = useState(false);
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [successAll, setSuccessAll] = useState(false);
+  const [successColor, setSuccessColor] = useState<string | null>(null);
+  const [progressText, setProgressText] = useState<string>("");
+
   const colorSubGroups = getColorSubGroups(group.variants);
   const colorMockupImages = colorSubGroups
     .map((cg) => {
@@ -2126,22 +2474,68 @@ function MasterProductDetailModal({
       : []
   ).filter((pd): pd is PrintDesign => Boolean(pd && pd.name));
 
+  const variantZoomImages: ZoomImageItem[] = colorSubGroups
+    .map((cg) => {
+      const rawBlankImage =
+        cg.blank_image_type === "combined" && cg.blank_image_back
+          ? cg.blank_image_back
+          : cg.blank_image || cg.blank_image_back;
+      const mockupUrl = cg.preview_url || rawBlankImage;
+      if (!mockupUrl) return null;
+      return {
+        url: mockupUrl,
+        title: `${group.master_name} - Màu ${formatColorName(cg.color)}`,
+        label: `Màu ${formatColorName(cg.color)} (${cg.variants.length} size)`,
+      };
+    })
+    .filter(Boolean) as ZoomImageItem[];
+
+  if (group.images && group.images.length > 0) {
+    group.images.forEach((url, i) => {
+      variantZoomImages.push({
+        url,
+        title: `${group.master_name} - Album media ${i + 1}`,
+        label: `Media ${i + 1}`,
+      });
+    });
+  }
+
   return (
-    <Modal open={true} onClose={onClose} title="Chi tiết Sản phẩm & Danh sách Biến thể" size="xl">
-      <div className="space-y-4 text-xs">
-        {/* Banner Tổng quan sản phẩm */}
-        <div className="p-3.5 sm:p-4 rounded-xl bg-slate-950/70 border border-slate-800 flex flex-col sm:flex-row gap-3.5 items-start sm:items-center justify-between">
-          <div className="flex gap-3.5 items-center min-w-0 flex-1">
+    <Modal open={true} onClose={onClose} title={`Chi tiết: ${group.master_name}`} size="2xl">
+      <div className="space-y-4">
+        {/* Thông báo Toast Thành Công khi Ghép Mockup */}
+        {toastMsg && (
+          <div className="p-3.5 rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-200 text-xs font-semibold flex items-center justify-between gap-2 animate-fade-in shadow-lg shadow-emerald-500/10">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 size={16} className="text-emerald-400 shrink-0" />
+              <span>{toastMsg}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setToastMsg(null)}
+              className="text-emerald-400 hover:text-emerald-200 text-xs p-1"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        )}
+
+        {/* Banner Tổng Quan Sản Phẩm Chung */}
+        <div className="p-4 rounded-2xl bg-slate-900 border border-slate-700/80 shadow-md flex flex-col sm:flex-row items-start justify-between gap-4">
+          <div className="flex items-start gap-3.5 min-w-0 flex-1">
+            {/* Ảnh đại diện Master Product */}
             <div
               onClick={() =>
                 mainImage &&
                 onZoomImage({
                   url: mainImage,
-                  title: `Sản phẩm: ${group.master_name}`,
+                  title: `${group.master_name} - Ảnh đại diện`,
+                  images: variantZoomImages,
+                  initialIndex: 0,
                 })
               }
-              className="relative w-16 h-16 sm:w-20 sm:h-20 rounded-xl bg-slate-900 border border-slate-700/80 overflow-hidden shrink-0 flex items-center justify-center cursor-zoom-in group/img"
-              title="Nhấp chuột xem ảnh HD"
+              className="relative w-16 h-16 sm:w-20 sm:h-20 rounded-xl bg-slate-950 border-2 border-slate-700 overflow-hidden shrink-0 flex items-center justify-center cursor-zoom-in group/img shadow-md"
+              title="Nhấp chuột để xem dải ảnh toàn bộ các biến thể"
             >
               {mainImage ? (
                 <img src={mainImage} alt="" className="w-full h-full object-contain group-hover/img:scale-105 transition-transform" />
@@ -2215,16 +2609,61 @@ function MasterProductDetailModal({
             </div>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0 sm:self-center">
+          <div className="flex items-center gap-2 shrink-0 sm:self-center flex-wrap">
+            {/* Nút Ghép lại toàn bộ các phôi màu sang ảnh HD R2 */}
+            <button
+              type="button"
+              onClick={async () => {
+                setReRenderingAll(true);
+                setProgressText(`Đang ghép (0/${colorSubGroups.length})...`);
+                try {
+                  const res = await onReRenderAllColors(group, (cur, tot, col) => {
+                    setProgressText(`Đang ghép ${cur}/${tot}: ${col}...`);
+                  });
+                  setSuccessAll(true);
+                  setToastMsg(`🎉 Đã ghép lại thành công ${res.success}/${res.total} phôi màu sang ảnh HD từ Cloudflare R2!`);
+                  setTimeout(() => setSuccessAll(false), 4000);
+                  setTimeout(() => setToastMsg(null), 4000);
+                } catch (err) {
+                  alert("Lỗi khi ghép ảnh: " + (err as Error).message);
+                } finally {
+                  setReRenderingAll(false);
+                  setProgressText("");
+                }
+              }}
+              disabled={reRenderingAll || !!reRenderingColor}
+              className={`px-3 py-2 rounded-xl transition-all font-semibold text-xs flex items-center gap-1.5 border cursor-pointer disabled:opacity-50 shadow-sm ${
+                successAll
+                  ? "bg-emerald-500 text-white border-emerald-500 shadow-lg shadow-emerald-500/20"
+                  : "text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20 border-emerald-500/30"
+              }`}
+              title="Tự động lấy ảnh gốc HD từ Cloudflare R2 ghép lại cho TẤT CẢ các phôi màu của sản phẩm này"
+            >
+              {reRenderingAll ? (
+                <Loader2 size={14} className="animate-spin text-emerald-400" />
+              ) : successAll ? (
+                <CheckCircle2 size={14} className="text-white" />
+              ) : (
+                <RefreshCw size={14} className="text-emerald-400" />
+              )}
+              <span>
+                {reRenderingAll
+                  ? progressText || "Đang ghép tất cả màu..."
+                  : successAll
+                  ? "✅ Đã ghép xong tất cả màu!"
+                  : "⚡ Ghép lại tất cả màu (HD R2)"}
+              </span>
+            </button>
+
             <button
               onClick={() => onMediaMaster(group)}
-              className="px-3 py-2 rounded-xl text-slate-200 bg-slate-800 hover:bg-slate-700 transition-colors font-medium flex items-center gap-1.5 border border-slate-700 cursor-pointer"
+              className="px-3 py-2 rounded-xl text-slate-200 bg-slate-800 hover:bg-slate-700 transition-colors text-xs font-medium flex items-center gap-1.5 border border-slate-700 cursor-pointer"
             >
               <ImageIcon size={14} /> Media ({group.images?.length || 0})
             </button>
             <button
               onClick={() => onEditMaster(group)}
-              className="px-3 py-2 rounded-xl text-amber-400 bg-amber-500/10 hover:bg-amber-500/20 transition-colors font-medium flex items-center gap-1.5 border border-amber-500/30 cursor-pointer"
+              className="px-3 py-2 rounded-xl text-amber-400 bg-amber-500/10 hover:bg-amber-500/20 transition-colors text-xs font-medium flex items-center gap-1.5 border border-amber-500/30 cursor-pointer"
             >
               <Pencil size={14} /> Sửa SP chung
             </button>
@@ -2246,7 +2685,6 @@ function MasterProductDetailModal({
                   ? cg.blank_image_back
                   : cg.blank_image || cg.blank_image_back;
               const colorMockupImage = cg.preview_url || rawBlankImage;
-              const isColorMockupDone = !!cg.preview_url;
 
               return (
                 <div
@@ -2256,13 +2694,14 @@ function MasterProductDetailModal({
                   {/* Header Phôi Màu */}
                   <div className="p-3 bg-slate-900 border-b border-slate-800 flex flex-wrap items-center justify-between gap-3">
                     <div className="flex items-center gap-3">
-                      {/* Thumbnail Phôi Màu */}
                       <div
                         onClick={() =>
                           colorMockupImage &&
                           onZoomImage({
                             url: colorMockupImage,
                             title: `${group.master_name} - Phôi Màu ${formatColorName(cg.color)}`,
+                            images: variantZoomImages,
+                            initialIndex: colorSubGroups.findIndex((c) => c.color === cg.color),
                           })
                         }
                         className="relative w-12 h-12 rounded-lg bg-slate-800 border border-slate-700/80 overflow-hidden shrink-0 flex items-center justify-center cursor-zoom-in group/subimg"
@@ -2273,37 +2712,10 @@ function MasterProductDetailModal({
                         ) : (
                           <Boxes size={20} className="text-slate-600" />
                         )}
-                        {!isColorMockupDone && group.print_design?.png_url && (
-                          <img
-                            src={group.print_design.png_url}
-                            alt=""
-                            style={{
-                              left: `${(cg.variants[0]?.print_position?.posX ?? (cg.blank_image_type === "combined" ? 28 : 50))}%`,
-                              top: `${(cg.variants[0]?.print_position?.posY ?? 38)}%`,
-                              width: `${(cg.variants[0]?.print_position?.scale ?? (cg.blank_image_type === "combined" ? 35 : 45))}%`,
-                              transform: "translate(-50%, -50%)",
-                            }}
-                            className="absolute object-contain pointer-events-none"
-                          />
-                        )}
                       </div>
 
                       <div>
                         <div className="flex items-center gap-2">
-                          {rawBlankImage && (
-                            <img
-                              src={rawBlankImage}
-                              alt=""
-                              onClick={() =>
-                                onZoomImage({
-                                  url: rawBlankImage,
-                                  title: `Phôi áo gốc: Màu ${formatColorName(cg.color)} (${cg.blank_image_type === "combined" ? "Hình 2: 2 Mặt" : "Hình 1: Mặt trước"})`,
-                                })
-                              }
-                              className="w-5 h-5 object-contain rounded bg-slate-800 border border-slate-700 p-0.5 shrink-0 cursor-zoom-in hover:scale-125 transition-transform"
-                              title="Nhấp chuột để phóng to phôi áo gốc"
-                            />
-                          )}
                           <span className="font-bold text-sm text-slate-100">Phôi Màu: {formatColorName(cg.color)}</span>
                           <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700 font-medium">
                             {cg.variants.length} size
@@ -2315,46 +2727,91 @@ function MasterProductDetailModal({
                       </div>
                     </div>
 
-                    <button
-                      onClick={() => {
-                        const list = group.print_designs_list && group.print_designs_list.length > 0
-                          ? group.print_designs_list
-                          : group.print_design
-                          ? [group.print_design]
-                          : [];
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {/* Nút Ghép Lại Hình HD (R2) Cho Màu Này */}
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          setReRenderingColor(cg.color);
+                          try {
+                            const ok = await onReRenderColor(group, cg);
+                            if (ok) {
+                              setSuccessColor(cg.color);
+                              setToastMsg(`✅ Đã ghép lại thành công ảnh HD (R2) cho màu ${formatColorName(cg.color)}!`);
+                              setTimeout(() => setSuccessColor(null), 3000);
+                              setTimeout(() => setToastMsg(null), 3000);
+                            }
+                          } finally {
+                            setReRenderingColor(null);
+                          }
+                        }}
+                        disabled={reRenderingColor === cg.color || reRenderingAll}
+                        className={`px-3 py-1.5 rounded-xl transition-all text-xs font-semibold flex items-center gap-1.5 border cursor-pointer disabled:opacity-50 ${
+                          successColor === cg.color
+                            ? "bg-emerald-500 text-white border-emerald-500 shadow-md"
+                            : "bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border-emerald-500/30"
+                        }`}
+                        title={`Tự động lấy ảnh gốc HD từ Cloudflare R2 ghép lại hình theo vị trí đã lưu cho màu ${formatColorName(cg.color)}`}
+                      >
+                        {reRenderingColor === cg.color ? (
+                          <Loader2 size={14} className="animate-spin text-emerald-400" />
+                        ) : successColor === cg.color ? (
+                          <Check size={14} />
+                        ) : (
+                          <RefreshCw size={14} className="text-emerald-400" />
+                        )}
+                        <span>
+                          {reRenderingColor === cg.color
+                            ? "Đang ghép lại..."
+                            : successColor === cg.color
+                            ? "Đã ghép xong!"
+                            : "⚡ Ghép lại hình HD (R2)"}
+                        </span>
+                      </button>
 
-                        const targetDesigns = list.map((d) => ({
-                          id: d.id,
-                          code: d.code,
-                          name: d.name,
-                          url: d.png_url,
-                        }));
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const list = group.print_designs_list && group.print_designs_list.length > 0
+                            ? group.print_designs_list
+                            : group.print_design
+                            ? [group.print_design]
+                            : [];
 
-                        onOpenMockupEditor({
-                          masterCode: `${group.master_code}-${cg.color}`,
-                          colorName: formatColorName(cg.color),
-                          blankImageUrl: cg.blank_image,
-                          blankImageBackUrl: cg.blank_image_back,
-                          printDesignUrl: group.print_design?.png_url || null,
-                          printDesigns: targetDesigns,
-                          variantIds: cg.variants.map((v) => v.id),
-                          allColorSubGroups: colorSubGroups.map((c) => ({
-                            color: c.color,
-                            blank_image: c.blank_image,
-                            blank_image_back: c.blank_image_back,
-                            blank_image_type: c.blank_image_type,
-                            variantIds: c.variants.map((v) => v.id),
-                          })),
-                          initialPosition: cg.variants.find((v) => v.print_position)?.print_position || cg.variants[0]?.print_position || null,
-                          initialPositions: cg.variants.find((v) => v.print_positions)?.print_positions || null,
-                          initialImageType: cg.blank_image_type || "front",
-                        });
-                      }}
-                      className="px-3 py-1.5 rounded-xl bg-brand-500/10 text-brand-400 hover:bg-brand-500/20 transition-colors text-xs font-semibold flex items-center gap-1.5 border border-brand-500/30 cursor-pointer"
-                      title={`Kéo thả & Chỉnh vị trí hình in riêng cho áo màu ${formatColorName(cg.color)}`}
-                    >
-                      <Sparkles size={14} /> Chỉnh vị trí hình in (Màu {formatColorName(cg.color)})
-                    </button>
+                          const targetDesigns = list.map((d) => ({
+                            id: d.id,
+                            code: d.code,
+                            name: d.name,
+                            url: d.png_url,
+                          }));
+
+                          onOpenMockupEditor({
+                            masterCode: `${group.master_code}_${cg.color}`,
+                            masterGroupCode: group.master_code,
+                            colorName: formatColorName(cg.color),
+                            blankImageUrl: cg.blank_image,
+                            blankImageBackUrl: cg.blank_image_back,
+                            printDesignUrl: group.print_design?.png_url || null,
+                            printDesigns: targetDesigns,
+                            variantIds: cg.variants.map((v) => v.id),
+                            allColorSubGroups: colorSubGroups.map((c) => ({
+                              color: c.color,
+                              blank_image: c.blank_image,
+                              blank_image_back: c.blank_image_back,
+                              blank_image_type: c.blank_image_type,
+                              variantIds: c.variants.map((v) => v.id),
+                            })),
+                            initialPosition: cg.variants.find((v) => v.print_position)?.print_position || cg.variants[0]?.print_position || null,
+                            initialPositions: cg.variants.find((v) => v.print_positions)?.print_positions || null,
+                            initialImageType: cg.blank_image_type || "front",
+                          });
+                        }}
+                        className="px-3 py-1.5 rounded-xl bg-brand-500/10 text-brand-400 hover:bg-brand-500/20 transition-colors text-xs font-semibold flex items-center gap-1.5 border border-brand-500/30 cursor-pointer"
+                        title={`Kéo thả & Chỉnh vị trí hình in riêng cho áo màu ${formatColorName(cg.color)}`}
+                      >
+                        <Sparkles size={14} /> Chỉnh vị trí in
+                      </button>
+                    </div>
                   </div>
 
                   {/* Bảng danh sách Size của phôi màu này */}

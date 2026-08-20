@@ -8,6 +8,7 @@ import { BlanksPage } from "@/pages/BlanksPage";
 import { PrintDesignsPage } from "@/pages/PrintDesignsPage";
 import { LogosPage } from "@/pages/LogosPage";
 import { ProductsPage } from "@/pages/ProductsPage";
+import { ProductOptimizePage } from "@/pages/ProductOptimizePage";
 import { UsersPage } from "@/pages/UsersPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { Loader2 } from "lucide-react";
@@ -39,6 +40,9 @@ function AppContent() {
       {effectivePage === "print-designs" && <PrintDesignsPage />}
       {effectivePage === "logos" && <LogosPage />}
       {effectivePage === "products" && <ProductsPage />}
+      {effectivePage === "product-optimize" && (
+        <ProductOptimizePage onNavigateToSettings={() => setPage("settings")} />
+      )}
       {effectivePage === "users" && <UsersPage />}
       {effectivePage === "settings" && <SettingsPage />}
     </Layout>

@@ -95,6 +95,10 @@ export interface Product {
   print_positions?: Record<string, PrintPositionData> | null;
   price: number;
   status: "active" | "inactive";
+  is_optimized?: boolean | null;
+  shopee_name?: string | null;
+  shopee_description?: string | null;
+  optimized_at?: string | null;
   created_at: string;
   blanks?: Blank;
   print_designs?: PrintDesign;

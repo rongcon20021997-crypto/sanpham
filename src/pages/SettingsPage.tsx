@@ -4,10 +4,39 @@ import type { Color, Size, Theme, CodeRule } from "@/lib/types";
 import { PageHeader, EmptyState } from "@/components/PageParts";
 import { Field } from "@/components/Field";
 import { useSync } from "@/context/SyncContext";
-import { Plus, Trash2, Loader2, Palette, Ruler, Tag, Code2, Save, Check, Cloud, HardDrive, RefreshCw } from "lucide-react";
+import {
+  Plus,
+  Trash2,
+  Loader2,
+  Palette,
+  Ruler,
+  Tag,
+  Code2,
+  Save,
+  Check,
+  Cloud,
+  HardDrive,
+  RefreshCw,
+  Sparkles,
+  Key,
+  Bot,
+  Eye,
+  EyeOff,
+  CheckCircle2,
+  AlertCircle,
+} from "lucide-react";
+import {
+  getOpenAiApiKey,
+  setOpenAiApiKey,
+  getOpenAiModel,
+  setOpenAiModel,
+  getOpenAiCustomPrompt,
+  setOpenAiCustomPrompt,
+  testOpenAiConnection,
+} from "@/lib/openai";
 
 export function SettingsPage() {
-  const [tab, setTab] = useState<"colors" | "sizes" | "themes" | "code" | "sync">("sync");
+  const [tab, setTab] = useState<"ai" | "colors" | "sizes" | "themes" | "code" | "sync">("ai");
   const [loading, setLoading] = useState(true);
   const [colors, setColors] = useState<Color[]>([]);
   const [sizes, setSizes] = useState<Size[]>([]);
@@ -31,6 +60,7 @@ export function SettingsPage() {
   }, []);
 
   const tabs = [
+    { key: "ai" as const, label: "AI OpenAI (Shopee)", icon: Sparkles },
     { key: "sync" as const, label: "Đồng bộ lưu trữ", icon: RefreshCw },
     { key: "colors" as const, label: "Màu", icon: Palette },
     { key: "sizes" as const, label: "Size", icon: Ruler },
@@ -40,7 +70,7 @@ export function SettingsPage() {
 
   return (
     <div className="animate-fade-in">
-      <PageHeader title="Cài đặt" subtitle="Quản lý danh mục màu, size, chủ đề, quy tắc mã và đồng bộ lưu trữ" />
+      <PageHeader title="Cài đặt" subtitle="Quản lý cấu hình AI OpenAI, danh mục màu, size, chủ đề, quy tắc mã và đồng bộ lưu trữ" />
 
       <div className="flex flex-wrap gap-1 p-1 bg-slate-900 rounded-xl border border-slate-700/50 mb-6 w-fit">
         {tabs.map((t) => {
@@ -60,6 +90,7 @@ export function SettingsPage() {
         <div className="flex justify-center py-16"><Loader2 className="animate-spin text-slate-600" size={32} /></div>
       ) : (
         <>
+          {tab === "ai" && <OpenAiTab />}
           {tab === "sync" && <SyncTab />}
           {tab === "colors" && <ColorsTab colors={colors} setColors={setColors} />}
           {tab === "sizes" && <SizesTab sizes={sizes} setSizes={setSizes} />}
@@ -327,6 +358,157 @@ function CodeTab({ codeRule, setCodeRule }: { codeRule: CodeRule | null; setCode
         {saved ? <Check size={18} /> : saving ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
         {saved ? "Đã lưu" : "Lưu quy tắc"}
       </button>
+    </div>
+  );
+}
+
+function OpenAiTab() {
+  const [apiKey, setApiKey] = useState(getOpenAiApiKey());
+  const [model, setModel] = useState(getOpenAiModel());
+  const [customPrompt, setCustomPrompt] = useState(getOpenAiCustomPrompt());
+  const [showKey, setShowKey] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  async function handleTest() {
+    if (!apiKey.trim()) {
+      setTestResult({ success: false, message: "Vui lòng nhập OpenAI API Key trước khi kiểm tra." });
+      return;
+    }
+    setTesting(true);
+    setTestResult(null);
+    const res = await testOpenAiConnection(apiKey.trim());
+    setTestResult(res);
+    setTesting(false);
+  }
+
+  function handleSave() {
+    setOpenAiApiKey(apiKey);
+    setOpenAiModel(model);
+    setOpenAiCustomPrompt(customPrompt);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2500);
+  }
+
+  return (
+    <div className="card-gradient rounded-2xl border border-slate-700/50 p-6 max-w-2xl space-y-6">
+      <div>
+        <h3 className="font-semibold text-slate-100 text-base mb-1 flex items-center gap-2">
+          <Sparkles size={18} className="text-brand-400" /> Cấu hình OpenAI AI (Tối ưu Sản phẩm Shopee)
+        </h3>
+        <p className="text-xs text-slate-400">
+          Thiết lập OpenAI API Key để hệ thống tự động sinh Tên sản phẩm chuẩn SEO Shopee và Mô tả sản phẩm thu hút cho thương hiệu <strong>MEO BAO</strong>.
+        </p>
+      </div>
+
+      <div className="space-y-4">
+        {/* API Key Input */}
+        <div>
+          <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center justify-between">
+            <span className="flex items-center gap-1.5">
+              <Key size={14} className="text-brand-400" /> OpenAI API Key <span className="text-rose-400 font-bold">*</span>
+            </span>
+            <span className="text-[11px] font-normal text-slate-400">Bắt đầu bằng <code>sk-...</code></span>
+          </label>
+          <div className="relative">
+            <input
+              type={showKey ? "text" : "password"}
+              value={apiKey}
+              onChange={(e) => {
+                setApiKey(e.target.value);
+                setTestResult(null);
+              }}
+              placeholder="sk-proj-..."
+              className="w-full px-3.5 py-2.5 pr-10 rounded-xl border border-slate-700/60 bg-slate-800/80 text-slate-100 text-xs font-mono outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500"
+            />
+            <button
+              type="button"
+              onClick={() => setShowKey(!showKey)}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200"
+              title={showKey ? "Ẩn Key" : "Hiện Key"}
+            >
+              {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
+            </button>
+          </div>
+          <p className="text-[11px] text-slate-500 mt-1">
+            🔒 API Key được lưu an toàn trực tiếp trên trình duyệt của bạn (Local Storage) và chỉ được gửi trực tiếp tới OpenAI API.
+          </p>
+        </div>
+
+        {/* Model Selection */}
+        <div>
+          <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center gap-1.5">
+            <Bot size={14} className="text-brand-400" /> Mô hình AI (OpenAI Model)
+          </label>
+          <select
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-700/60 bg-slate-800/80 text-slate-100 text-xs outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500 cursor-pointer"
+          >
+            <option value="gpt-4o-mini">gpt-4o-mini (Khuyên dùng - Nhanh, Siêu rẻ, Tối ưu SEO Shopee xuất sắc)</option>
+            <option value="gpt-4o">gpt-4o (Mô hình thông minh cao cấp nhất)</option>
+            <option value="gpt-3.5-turbo">gpt-3.5-turbo (Mô hình cổ điển tiêu chuẩn)</option>
+          </select>
+        </div>
+
+        {/* Custom Prompt Note */}
+        <div>
+          <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+            Ghi chú / Quy tắc viết Shopee bổ sung (Tùy chọn)
+          </label>
+          <textarea
+            value={customPrompt}
+            onChange={(e) => setCustomPrompt(e.target.value)}
+            rows={3}
+            placeholder="VD: Nhấn mạnh form áo rộng che khuyết điểm, tặng kèm quà sticker cho mỗi đơn hàng, bảo hành đổi trả 7 ngày..."
+            className="w-full px-3.5 py-2 rounded-xl border border-slate-700/60 bg-slate-800/80 text-slate-100 text-xs outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500 custom-scrollbar"
+          />
+        </div>
+
+        {/* Test Result Alert */}
+        {testResult && (
+          <div
+            className={`p-3.5 rounded-xl border flex items-start gap-2.5 text-xs ${
+              testResult.success
+                ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+                : "bg-rose-500/10 border-rose-500/30 text-rose-300"
+            }`}
+          >
+            {testResult.success ? (
+              <CheckCircle2 size={16} className="shrink-0 mt-0.5 text-emerald-400" />
+            ) : (
+              <AlertCircle size={16} className="shrink-0 mt-0.5 text-rose-400" />
+            )}
+            <div>
+              <p className="font-semibold">{testResult.success ? "Kết nối thành công!" : "Lỗi kết nối:"}</p>
+              <p className="mt-0.5 text-[11px] opacity-90">{testResult.message}</p>
+            </div>
+          </div>
+        )}
+
+        {/* Buttons */}
+        <div className="flex flex-wrap items-center gap-3 pt-2">
+          <button
+            type="button"
+            onClick={handleTest}
+            disabled={testing || !apiKey.trim()}
+            className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors flex items-center gap-1.5 disabled:opacity-40"
+          >
+            {testing && <Loader2 size={14} className="animate-spin" />}
+            <span>Kiểm tra kết nối Key</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleSave}
+            className="px-5 py-2.5 rounded-xl bg-brand-500 hover:bg-brand-600 text-white text-xs font-semibold shadow-lg shadow-brand-500/20 transition-all flex items-center gap-1.5"
+          >
+            {saved ? <Check size={15} /> : <Save size={15} />}
+            <span>{saved ? "Đã lưu cài đặt AI!" : "Lưu cài đặt AI"}</span>
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

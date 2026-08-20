@@ -132,3 +132,85 @@ export function getR2OriginalUrl(
   return fallbackUrl || null;
 }
 
+/**
+ * Tự động chuyển đổi bất kỳ URL ảnh (Supabase / local) sang URL ảnh GỐC HD từ Cloudflare R2
+ */
+export function getHdImageUrl(
+  urlOrCode: string | null | undefined,
+  folder: string = "designs",
+  code?: string
+): string | null {
+  if (!urlOrCode) return null;
+
+  const publicDomain = import.meta.env.VITE_R2_PUBLIC_DOMAIN;
+  if (!publicDomain) return urlOrCode;
+
+  const cleanDomain = publicDomain.endsWith("/") ? publicDomain.slice(0, -1) : publicDomain;
+
+  // Nếu domain cấu hình là S3 API endpoint (.r2.cloudflarestorage.com) thay vì public domain (pub-xxx.r2.dev hoặc custom domain),
+  // trình duyệt mở trực tiếp sẽ bị lỗi XML Authorization. Do đó trả về URL ảnh trực tiếp đang có.
+  if (cleanDomain.includes(".r2.cloudflarestorage.com")) {
+    return urlOrCode;
+  }
+
+  // Nếu url đã là link R2 public domain thì trả về luôn
+  if (urlOrCode.includes(cleanDomain)) {
+    return urlOrCode;
+  }
+
+  // 1. Nếu có code tường minh
+  if (code) {
+    const sanitizedCode = code.trim().replace(/[^a-zA-Z0-9_-]/g, "_").toUpperCase();
+    return `${cleanDomain}/${folder}/${sanitizedCode}.png`;
+  }
+
+  // 2. Nếu là link Supabase Storage (e.g. .../tshirt-assets/designs/SKULL_01.webp or .../blanks/CT220_DEN.webp)
+  const match = urlOrCode.match(/\/tshirt-assets\/([^?#]+)/);
+  if (match && match[1]) {
+    const assetPath = match[1];
+    if (assetPath.startsWith("products/mockups/")) {
+      return `${cleanDomain}/${assetPath}`;
+    }
+    const pathNoExt = assetPath.replace(/\.[^/.]+$/, "");
+    return `${cleanDomain}/${pathNoExt}.png`;
+  }
+
+  return urlOrCode;
+}
+
+/**
+ * Tải ảnh vào đối tượng HTMLImageElement với ưu tiên lấy ảnh GỐC HD từ Cloudflare R2
+ * Nếu link R2 lỗi (hoặc chưa đồng bộ), tự động fallback về link ban đầu để không bao giờ bị gãy ảnh.
+ */
+export async function loadImageWithR2Priority(
+  url: string,
+  folder: string = "designs",
+  code?: string
+): Promise<HTMLImageElement> {
+  const r2Url = getHdImageUrl(url, folder, code);
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+
+  return new Promise((resolve, reject) => {
+    if (r2Url && r2Url !== url) {
+      img.src = r2Url;
+      img.onload = () => {
+        console.info(`⚡ [R2 HD]: Tải ảnh gốc HD thành công từ R2: ${r2Url}`);
+        resolve(img);
+      };
+      img.onerror = () => {
+        console.warn(`⚠️ [R2 Fallback]: Không tải được từ R2 (${r2Url}), tự động chuyển về link dự phòng.`);
+        const fallbackImg = new Image();
+        fallbackImg.crossOrigin = "anonymous";
+        fallbackImg.src = url;
+        fallbackImg.onload = () => resolve(fallbackImg);
+        fallbackImg.onerror = (e) => reject(e);
+      };
+    } else {
+      img.src = url;
+      img.onload = () => resolve(img);
+      img.onerror = (e) => reject(e);
+    }
+  });
+}
+
