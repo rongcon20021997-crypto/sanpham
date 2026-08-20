@@ -6,7 +6,7 @@ import { Modal } from "@/components/Modal";
 import { Field, Select } from "@/components/Field";
 import { ImageUpload } from "@/components/ImageUpload";
 import { ImageCropperModal } from "@/components/ImageCropperModal";
-import { Plus, Pencil, Trash2, Loader2, Image as ImageIcon, Tag, X, Crop } from "lucide-react";
+import { Plus, Pencil, Trash2, Loader2, Image as ImageIcon, Tag, X, Crop, Check } from "lucide-react";
 
 export function PrintDesignsPage() {
   const [items, setItems] = useState<PrintDesign[]>([]);
@@ -14,6 +14,7 @@ export function PrintDesignsPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [filterTheme, setFilterTheme] = useState("");
+  const [filterSide, setFilterSide] = useState<string>("all"); // "all" | "front" | "back"
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<PrintDesign | null>(null);
   const [croppingItem, setCroppingItem] = useState<PrintDesign | null>(null);
@@ -25,6 +26,7 @@ export function PrintDesignsPage() {
     thumbnail_url: "" as string | null,
     tags: [] as string[],
     notes: "",
+    is_back: false,
   });
   const [tagInput, setTagInput] = useState("");
   const [saving, setSaving] = useState(false);
@@ -47,7 +49,16 @@ export function PrintDesignsPage() {
 
   function openCreate() {
     setEditing(null);
-    setForm({ code: "", name: "", theme: "", png_url: null, thumbnail_url: null, tags: [], notes: "" });
+    setForm({
+      code: "",
+      name: "",
+      theme: "",
+      png_url: null,
+      thumbnail_url: null,
+      tags: [],
+      notes: "",
+      is_back: false,
+    });
     setTagInput("");
     setError(null);
     setModalOpen(true);
@@ -63,6 +74,7 @@ export function PrintDesignsPage() {
       thumbnail_url: item.thumbnail_url,
       tags: item.tags || [],
       notes: item.notes || "",
+      is_back: Boolean(item.is_back),
     });
     setTagInput("");
     setError(null);
@@ -81,6 +93,27 @@ export function PrintDesignsPage() {
     setForm({ ...form, tags: form.tags.filter((x) => x !== t) });
   }
 
+  async function handleToggleIsBack(item: PrintDesign) {
+    const nextVal = !item.is_back;
+    // Optimistic UI update
+    setItems((prev) =>
+      prev.map((i) => (i.id === item.id ? { ...i, is_back: nextVal } : i))
+    );
+    try {
+      const { error } = await supabase
+        .from("print_designs")
+        .update({ is_back: nextVal })
+        .eq("id", item.id);
+      if (error) throw error;
+    } catch (err) {
+      alert("Lỗi cập nhật vị trí hình in: " + (err as Error).message);
+      // rollback
+      setItems((prev) =>
+        prev.map((i) => (i.id === item.id ? { ...i, is_back: !nextVal } : i))
+      );
+    }
+  }
+
   async function handleSave() {
     setError(null);
     if (!form.code.trim() || !form.name.trim()) {
@@ -96,6 +129,7 @@ export function PrintDesignsPage() {
       thumbnail_url: form.thumbnail_url,
       tags: form.tags.length ? form.tags : null,
       notes: form.notes || null,
+      is_back: Boolean(form.is_back),
     };
     try {
       if (editing) {
@@ -144,16 +178,31 @@ export function PrintDesignsPage() {
       i.name.toLowerCase().includes(search.toLowerCase()) ||
       (i.tags || []).some((t) => t.toLowerCase().includes(search.toLowerCase()));
     const matchTheme = !filterTheme || i.theme === filterTheme;
-    return matchSearch && matchTheme;
+    const matchSide =
+      filterSide === "all" ||
+      (filterSide === "back" && Boolean(i.is_back)) ||
+      (filterSide === "front" && !i.is_back);
+    return matchSearch && matchTheme && matchSide;
   });
 
   return (
     <div className="animate-fade-in">
       <PageHeader
         title="Hình in"
-        subtitle="Quản lý hình in (file PNG nền trong, thumbnail, tag)"
+        subtitle="Quản lý hình in (file PNG nền trong, vị trí in trước/sau, thumbnail, tag)"
         actions={
           <>
+            <Select
+              label=""
+              value={filterSide}
+              onChange={setFilterSide}
+              options={[
+                { value: "all", label: "Tất cả vị trí" },
+                { value: "front", label: "👕 Chỉ mặt trước" },
+                { value: "back", label: "🔙 Chỉ mặt sau (In sau)" },
+              ]}
+              placeholder="Vị trí in"
+            />
             <Select
               label=""
               value={filterTheme}
@@ -178,74 +227,140 @@ export function PrintDesignsPage() {
         </div>
       ) : filtered.length === 0 ? (
         <div className="card-gradient rounded-2xl border border-slate-700/50">
-          <EmptyState message="Chưa có hình in nào. Nhấn Thêm để tạo." />
+          <EmptyState message="Chưa có hình in nào phù hợp. Nhấn Thêm để tạo mới." />
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-4">
           {filtered.map((item) => (
             <div
               key={item.id}
-              className="card-gradient rounded-2xl border border-slate-700/50 overflow-hidden hover:border-slate-600 transition-colors group"
+              className={`card-gradient rounded-2xl border transition-all group flex flex-col justify-between ${
+                item.is_back
+                  ? "border-amber-500/40 hover:border-amber-500/70"
+                  : "border-slate-700/50 hover:border-slate-600"
+              }`}
             >
-              <div className="aspect-square bg-slate-800/30 flex items-center justify-center overflow-hidden relative">
-                {item.thumbnail_url || item.png_url ? (
-                  <img
-                    src={(item.thumbnail_url || item.png_url) as string}
-                    alt={item.name}
-                    className="w-full h-full object-contain"
-                  />
-                ) : (
-                  <ImageIcon size={36} className="text-slate-700" />
-                )}
-                <div className="absolute top-2 left-2 flex gap-1">
-                  <span className="px-2 py-0.5 rounded-md bg-slate-950/70 text-slate-300 text-[10px] font-mono">
-                    {item.code}
-                  </span>
+              <div>
+                <div className="aspect-square bg-slate-800/30 flex items-center justify-center overflow-hidden relative">
+                  {item.thumbnail_url || item.png_url ? (
+                    <img
+                      src={(item.thumbnail_url || item.png_url) as string}
+                      alt={item.name}
+                      className="w-full h-full object-contain p-2"
+                    />
+                  ) : (
+                    <ImageIcon size={36} className="text-slate-700" />
+                  )}
+
+                  {/* Mã hình in */}
+                  <div className="absolute top-2 left-2 flex gap-1 z-10">
+                    <span className="px-2 py-0.5 rounded-md bg-slate-950/80 text-slate-300 text-[10px] font-mono border border-slate-800 backdrop-blur-sm">
+                      {item.code}
+                    </span>
+                  </div>
+
+                  {/* Dấu tích nhanh / Nút badge Mặt sau ở góc trên bên phải */}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleToggleIsBack(item);
+                    }}
+                    title={item.is_back ? "Đang áp dụng Mặt sau (Click để bỏ chọn)" : "Click để áp dụng cho Mặt sau của áo"}
+                    className={`absolute top-2 right-2 flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold transition-all shadow-md z-10 ${
+                      item.is_back
+                        ? "bg-amber-500 text-slate-950 hover:bg-amber-400 border border-amber-400"
+                        : "bg-slate-950/80 text-slate-400 border border-slate-700/80 hover:border-slate-500 hover:text-slate-200"
+                    }`}
+                  >
+                    <span
+                      className={`w-3 h-3 rounded flex items-center justify-center border transition-colors ${
+                        item.is_back
+                          ? "border-slate-950 bg-slate-950 text-amber-400"
+                          : "border-slate-500 bg-slate-800"
+                      }`}
+                    >
+                      {item.is_back && <Check size={10} strokeWidth={4} />}
+                    </span>
+                    <span>{item.is_back ? "Mặt sau" : "Mặt trước"}</span>
+                  </button>
+
+                  {/* Action buttons khi hover */}
+                  <div className="absolute inset-0 bg-slate-950/0 group-hover:bg-slate-950/40 transition-colors flex items-center justify-center gap-1.5 opacity-0 group-hover:opacity-100 p-2">
+                    <button
+                      onClick={() => setCroppingItem(item)}
+                      title="Cắt & Sửa viền hình in"
+                      className="p-2 rounded-lg bg-slate-800 text-slate-200 shadow-lg hover:text-brand-400 border border-slate-700 hover:bg-slate-700 transition-colors"
+                    >
+                      <Crop size={16} />
+                    </button>
+                    <button
+                      onClick={() => openEdit(item)}
+                      title="Chỉnh sửa thông tin"
+                      className="p-2 rounded-lg bg-slate-800 text-slate-200 shadow-lg hover:text-brand-400 border border-slate-700 hover:bg-slate-700 transition-colors"
+                    >
+                      <Pencil size={16} />
+                    </button>
+                    <button
+                      onClick={() => handleDelete(item)}
+                      title="Xóa hình in"
+                      className="p-2 rounded-lg bg-slate-800 text-slate-200 shadow-lg hover:text-rose-400 border border-slate-700 hover:bg-slate-700 transition-colors"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
                 </div>
-                <div className="absolute inset-0 bg-slate-950/0 group-hover:bg-slate-950/40 transition-colors flex items-center justify-center gap-1.5 opacity-0 group-hover:opacity-100 p-2">
-                  <button
-                    onClick={() => setCroppingItem(item)}
-                    title="Cắt & Sửa viền hình in"
-                    className="p-2 rounded-lg bg-slate-800 text-slate-200 shadow-lg hover:text-brand-400 border border-slate-700 hover:bg-slate-700 transition-colors"
-                  >
-                    <Crop size={16} />
-                  </button>
-                  <button
-                    onClick={() => openEdit(item)}
-                    title="Chỉnh sửa thông tin"
-                    className="p-2 rounded-lg bg-slate-800 text-slate-200 shadow-lg hover:text-brand-400 border border-slate-700 hover:bg-slate-700 transition-colors"
-                  >
-                    <Pencil size={16} />
-                  </button>
-                  <button
-                    onClick={() => handleDelete(item)}
-                    title="Xóa hình in"
-                    className="p-2 rounded-lg bg-slate-800 text-slate-200 shadow-lg hover:text-rose-400 border border-slate-700 hover:bg-slate-700 transition-colors"
-                  >
-                    <Trash2 size={16} />
-                  </button>
+
+                <div className="p-3 pb-2">
+                  <p className="text-sm font-semibold text-slate-200 truncate" title={item.name}>
+                    {item.name}
+                  </p>
+                  {item.theme && (
+                    <span className="inline-block mt-1 px-2 py-0.5 rounded-md bg-violet-500/10 text-violet-400 text-[11px] font-medium">
+                      {item.theme}
+                    </span>
+                  )}
+                  {item.tags && item.tags.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-1.5">
+                      {item.tags.slice(0, 3).map((t) => (
+                        <span key={t} className="text-[10px] text-slate-500">
+                          #{t}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
-              <div className="p-3">
-                <p className="text-sm font-medium text-slate-200 truncate">{item.name}</p>
-                {item.theme && (
-                  <span className="inline-block mt-1 px-2 py-0.5 rounded-md bg-violet-500/10 text-violet-400 text-[11px] font-medium">
-                    {item.theme}
+
+              {/* Dấu tích checkbox ở chân thẻ hình in */}
+              <div className="px-3 py-2 border-t border-slate-800/80 bg-slate-950/30 flex items-center justify-between">
+                <label
+                  onClick={(e) => e.stopPropagation()}
+                  className="flex items-center gap-2 cursor-pointer text-xs select-none group/chk w-full"
+                >
+                  <input
+                    type="checkbox"
+                    checked={Boolean(item.is_back)}
+                    onChange={() => handleToggleIsBack(item)}
+                    className="w-3.5 h-3.5 rounded border-slate-700 bg-slate-900 text-amber-500 focus:ring-amber-500/30 cursor-pointer accent-amber-500"
+                  />
+                  <span
+                    className={`transition-colors text-[11px] ${
+                      item.is_back
+                        ? "text-amber-400 font-bold"
+                        : "text-slate-400 group-hover/chk:text-slate-300"
+                    }`}
+                  >
+                    {item.is_back ? "✓ Áp dụng mặt sau" : "Áp dụng mặt sau"}
                   </span>
-                )}
-                {item.tags && item.tags.length > 0 && (
-                  <div className="flex flex-wrap gap-1 mt-1.5">
-                    {item.tags.slice(0, 3).map((t) => (
-                      <span key={t} className="text-[10px] text-slate-500">#{t}</span>
-                    ))}
-                  </div>
-                )}
+                </label>
               </div>
             </div>
           ))}
         </div>
       )}
 
+      {/* Modal Thêm / Sửa */}
       <Modal
         open={modalOpen}
         onClose={() => setModalOpen(false)}
@@ -273,6 +388,23 @@ export function PrintDesignsPage() {
               options={themes.map((t) => ({ value: t.name, label: t.name }))}
               placeholder="Chọn chủ đề"
             />
+
+            {/* Checkbox Áp dụng mặt sau */}
+            <label className="flex items-start gap-2.5 p-3 rounded-xl border border-slate-700/50 bg-slate-800/40 cursor-pointer hover:bg-slate-800/70 transition-colors">
+              <input
+                type="checkbox"
+                checked={form.is_back}
+                onChange={(e) => setForm({ ...form, is_back: e.target.checked })}
+                className="w-4 h-4 mt-0.5 rounded border-slate-700 bg-slate-900 text-amber-500 focus:ring-amber-500/30 cursor-pointer accent-amber-500"
+              />
+              <div>
+                <p className="text-xs font-semibold text-slate-200">Áp dụng cho hình mặt sau của áo</p>
+                <p className="text-[10px] text-slate-400">
+                  Hình in này sẽ được định vị mặc định cho mặt sau khi tạo sản phẩm hoặc ghép mockup 2 mặt áo
+                </p>
+              </div>
+            </label>
+
             <div className="space-y-1.5">
               <label className="block text-sm font-medium text-slate-300">Tag</label>
               <div className="flex gap-2">

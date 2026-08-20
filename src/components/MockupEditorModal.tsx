@@ -286,13 +286,13 @@ export function MockupEditorModal({
           if (nonLogoEntries[idx]) {
             posMap[d.id] = { ...nonLogoEntries[idx][1] };
           } else {
-            const defaultX = type === "combined" ? (idx === 1 ? 72 : 28) : idx === 1 ? 38 : 50;
+            const defaultX = type === "combined" ? (d.is_back ? 72 : (idx === 1 ? 72 : 28)) : idx === 1 ? 38 : 50;
             const defaultY = idx === 2 ? 65 : 38;
             const defaultS = type === "combined" ? 35 : idx === 1 ? 25 : 45;
             posMap[d.id] = { posX: defaultX, posY: defaultY, scale: defaultS, visible: true };
           }
         } else {
-          const defaultX = type === "combined" ? (idx === 1 ? 72 : 28) : idx === 1 ? 38 : 50;
+          const defaultX = type === "combined" ? (d.is_back ? 72 : (idx === 1 ? 72 : 28)) : idx === 1 ? 38 : 50;
           const defaultY = idx === 2 ? 65 : 38;
           const defaultS = type === "combined" ? 35 : idx === 1 ? 25 : 45;
           posMap[d.id] = { posX: defaultX, posY: defaultY, scale: defaultS, visible: true };

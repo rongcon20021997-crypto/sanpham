@@ -154,6 +154,50 @@ async function generateAndUploadMockupForBlank({
   }
 }
 
+// Helper nhóm các biến thể theo phôi màu
+export function getColorSubGroups(variants: Product[]) {
+  const colorSubGroupsMap: Record<
+    string,
+    {
+      color: string;
+      blank_image: string | null;
+      blank_image_back: string | null;
+      preview_url: string | null;
+      blank_image_type?: string | null;
+      variants: Product[];
+    }
+  > = {};
+
+  variants.forEach((v) => {
+    const colorKey = v.blanks?.color || "Khác";
+    if (!colorSubGroupsMap[colorKey]) {
+      colorSubGroupsMap[colorKey] = {
+        color: colorKey,
+        blank_image: v.blanks?.image_url || null,
+        blank_image_back: v.blanks?.image_back_url || null,
+        preview_url: v.preview_url || null,
+        blank_image_type: v.blank_image_type || null,
+        variants: [],
+      };
+    }
+    colorSubGroupsMap[colorKey].variants.push(v);
+    if (!colorSubGroupsMap[colorKey].blank_image && v.blanks?.image_url) {
+      colorSubGroupsMap[colorKey].blank_image = v.blanks.image_url;
+    }
+    if (!colorSubGroupsMap[colorKey].blank_image_back && v.blanks?.image_back_url) {
+      colorSubGroupsMap[colorKey].blank_image_back = v.blanks.image_back_url;
+    }
+    if (!colorSubGroupsMap[colorKey].preview_url && v.preview_url) {
+      colorSubGroupsMap[colorKey].preview_url = v.preview_url;
+    }
+    if (!colorSubGroupsMap[colorKey].blank_image_type && v.blank_image_type) {
+      colorSubGroupsMap[colorKey].blank_image_type = v.blank_image_type;
+    }
+  });
+
+  return Object.values(colorSubGroupsMap);
+}
+
 export function ProductsPage() {
   const [items, setItems] = useState<Product[]>([]);
   const [blanks, setBlanks] = useState<Blank[]>([]);
@@ -178,7 +222,7 @@ export function ProductsPage() {
   const [editMasterGroup, setEditMasterGroup] = useState<MasterProductGroup | null>(null);
   const [mockupEditorTarget, setMockupEditorTarget] = useState<MockupEditorTarget | null>(null);
   const [zoomImage, setZoomImage] = useState<{ url: string; title: string } | null>(null);
-  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+  const [detailGroupKey, setDetailGroupKey] = useState<string | null>(null);
 
   const [editPrice, setEditPrice] = useState("");
   const [editStatus, setEditStatus] = useState("active");
@@ -339,9 +383,10 @@ export function ProductsPage() {
     return Array.from(map.values());
   }, [filtered]);
 
-  function toggleGroup(key: string) {
-    setExpandedGroups((prev) => ({ ...prev, [key]: !prev[key] }));
-  }
+  const activeDetailGroup = useMemo(() => {
+    if (!detailGroupKey) return null;
+    return masterGroups.find((g) => g.key === detailGroupKey) || null;
+  }, [masterGroups, detailGroupKey]);
 
   function openEditVariant(p: Product) {
     setEditItem(p);
@@ -481,54 +526,11 @@ export function ProductsPage() {
           <EmptyState message="Chưa có sản phẩm nào. Tạo sản phẩm chung mới để bắt đầu." />
         </div>
       ) : viewMode === "grouped" ? (
-        /* Grouped Master Product View */
-        <div className="space-y-3.5 sm:space-y-4">
+        /* Compact Grouped Master Product View */
+        <div className="space-y-3">
           {masterGroups.map((group) => {
-            const isExpanded = expandedGroups[group.key] ?? true;
+            const colorSubGroups = getColorSubGroups(group.variants);
 
-            // Nhóm tất cả các biến thể thuộc sản phẩm này theo PHÔI MÀU (Color Sub-groups)
-            const colorSubGroupsMap: Record<
-              string,
-              {
-                color: string;
-                blank_image: string | null;
-                blank_image_back: string | null;
-                preview_url: string | null;
-                blank_image_type?: string | null;
-                variants: Product[];
-              }
-            > = {};
-
-            group.variants.forEach((v) => {
-              const colorKey = v.blanks?.color || "Khác";
-              if (!colorSubGroupsMap[colorKey]) {
-                colorSubGroupsMap[colorKey] = {
-                  color: colorKey,
-                  blank_image: v.blanks?.image_url || null,
-                  blank_image_back: v.blanks?.image_back_url || null,
-                  preview_url: v.preview_url || null,
-                  blank_image_type: v.blank_image_type || null,
-                  variants: [],
-                };
-              }
-              colorSubGroupsMap[colorKey].variants.push(v);
-              if (!colorSubGroupsMap[colorKey].blank_image && v.blanks?.image_url) {
-                colorSubGroupsMap[colorKey].blank_image = v.blanks.image_url;
-              }
-              if (!colorSubGroupsMap[colorKey].blank_image_back && v.blanks?.image_back_url) {
-                colorSubGroupsMap[colorKey].blank_image_back = v.blanks.image_back_url;
-              }
-              if (!colorSubGroupsMap[colorKey].preview_url && v.preview_url) {
-                colorSubGroupsMap[colorKey].preview_url = v.preview_url;
-              }
-              if (!colorSubGroupsMap[colorKey].blank_image_type && v.blank_image_type) {
-                colorSubGroupsMap[colorKey].blank_image_type = v.blank_image_type;
-              }
-            });
-
-            const colorSubGroups = Object.values(colorSubGroupsMap);
-
-            // Tập hợp tất cả ảnh đại diện đại diện cho các Phôi màu của sản phẩm này (tính theo đúng loại hình phôi 1 áo hay 2 áo)
             const colorMockupImages = colorSubGroups
               .map((cg) => {
                 const rawBlankImage =
@@ -557,355 +559,156 @@ export function ProductsPage() {
                 : { posX: 50, posY: 38, scale: 45 }
             );
 
+            const designsList = (
+              group.print_designs_list && group.print_designs_list.length > 0
+                ? group.print_designs_list
+                : group.print_design
+                ? [group.print_design]
+                : []
+            ).filter((pd): pd is PrintDesign => Boolean(pd && pd.name));
+
             return (
               <div
                 key={group.key}
-                className="card-gradient rounded-2xl border border-slate-700/50 overflow-hidden shadow-lg transition-all"
+                className="card-gradient rounded-2xl border border-slate-700/50 hover:border-brand-500/40 p-3 sm:p-4 transition-all duration-200 shadow-md hover:shadow-lg flex flex-col md:flex-row gap-3.5 sm:gap-4 items-start md:items-center justify-between group"
               >
-                {/* Master Product Header Card */}
-                <div className="p-3.5 sm:p-5 flex flex-col md:flex-row gap-3.5 sm:gap-5 items-start md:items-center justify-between border-b border-slate-800/80">
-                  <div className="flex gap-3 sm:gap-4 items-start sm:items-center min-w-0 flex-1">
-                    {/* BÊN TRÁI: Box Ảnh sản phẩm chính */}
-                    <div
-                      onClick={() =>
-                        mainImage &&
-                        setZoomImage({
-                          url: mainImage,
-                          title: `Sản phẩm: ${group.master_name}`,
-                        })
-                      }
-                      className="relative w-16 h-16 sm:w-20 sm:h-20 rounded-xl bg-slate-800/60 border border-slate-700/60 overflow-hidden shrink-0 flex items-center justify-center cursor-zoom-in group/img"
-                      title="Nhấp chuột để xem ảnh phóng to"
-                    >
-                      {mainImage ? (
-                        <img src={mainImage} alt="" className="w-full h-full object-contain group-hover/img:scale-105 transition-transform" />
-                      ) : (
-                        <Boxes size={24} className="text-slate-600" />
-                      )}
-                      {printPng && (
-                        <img
-                          src={printPng}
-                          alt=""
-                          style={{
-                            left: `${firstPos.posX ?? (firstVariant?.blank_image_type === "combined" ? 28 : 50)}%`,
-                            top: `${firstPos.posY ?? 38}%`,
-                            width: `${firstPos.scale ?? (firstVariant?.blank_image_type === "combined" ? 35 : 45)}%`,
-                            transform: "translate(-50%, -50%)",
-                          }}
-                          className="absolute object-contain pointer-events-none"
-                        />
-                      )}
-                      {colorMockupImages.length > 1 && (
-                        <span className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-black/70 text-[9px] sm:text-[10px] font-medium text-white flex items-center gap-0.5">
-                          <ImageIcon size={9} /> {colorSubGroups.length} màu
-                        </span>
-                      )}
-                      {group.video_url && (
-                        <span className="absolute top-1 left-1 p-0.5 sm:p-1 rounded-full bg-brand-500/80 text-white">
-                          <Play size={9} className="fill-white" />
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Master Info */}
-                    <div className="space-y-1 min-w-0 flex-1">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className="font-mono text-[11px] sm:text-xs font-semibold px-2 py-0.5 rounded-md bg-brand-500/10 text-brand-400 border border-brand-500/20">
-                          {group.master_code}
-                        </span>
-                        {group.blank_type && (
-                          <span className="text-[11px] sm:text-xs px-2 py-0.5 rounded-md bg-slate-800 text-slate-400 border border-slate-700/50 truncate max-w-[120px] sm:max-w-none">
-                            Phôi: {group.blank_type.name}
-                          </span>
-                        )}
-                        {(group.print_designs_list && group.print_designs_list.length > 0
-                          ? group.print_designs_list
-                          : group.print_design
-                          ? [group.print_design]
-                          : []
-                        )
-                          .filter((pd): pd is PrintDesign => Boolean(pd && pd.name))
-                          .map((pd, idx) => (
-                            <span
-                              key={pd.id || idx}
-                              className="text-[11px] sm:text-xs px-2.5 py-1 rounded-md bg-slate-800 text-slate-200 border border-slate-700/60 flex items-center gap-1.5 truncate max-w-[200px] sm:max-w-none"
-                            >
-                              {pd.png_url && (
-                                <img
-                                  src={pd.png_url}
-                                  alt=""
-                                  onClick={() =>
-                                    setZoomImage({
-                                      url: pd.png_url!,
-                                      title: `Hình in ${idx + 1}: ${pd.name}`,
-                                    })
-                                  }
-                                  className="w-5 h-5 object-contain rounded bg-slate-900 border border-slate-700 p-0.5 shrink-0 cursor-zoom-in hover:scale-125 transition-transform"
-                                  title="Nhấp chuột để phóng to hình in"
-                                />
-                              )}
-                              <span>
-                                Hình {idx + 1}: <strong>{pd.name}</strong>
-                              </span>
-                            </span>
-                          ))}
-                      </div>
-                      <h3 className="text-sm sm:text-base font-bold text-slate-100 leading-snug truncate">
-                        {group.master_name}
-                      </h3>
-                      <div className="flex items-center gap-2 sm:gap-3 text-xs text-slate-400 pt-0.5 flex-wrap">
-                        <span className="flex items-center gap-1 text-emerald-400 font-bold text-xs sm:text-sm">
-                          {group.minPrice === group.maxPrice
-                            ? formatCurrency(group.minPrice)
-                            : `${formatCurrency(group.minPrice)} - ${formatCurrency(group.maxPrice)}`}
-                        </span>
-                        <span>•</span>
-                        <span className="bg-slate-800 text-slate-300 px-2 py-0.5 rounded-full text-[11px] font-medium">
-                          {colorSubGroups.length} phôi màu ({group.variants.length} size)
-                        </span>
-                        {group.video_url && (
-                          <span className="text-indigo-400 flex items-center gap-1 text-[11px]">
-                            <Video size={12} /> Video
-                          </span>
-                        )}
-                      </div>
-                    </div>
+                {/* Left: Thumbnail & Master Info */}
+                <div className="flex gap-3 sm:gap-4 items-center min-w-0 flex-1 w-full md:w-auto">
+                  {/* Image container */}
+                  <div
+                    onClick={() =>
+                      mainImage &&
+                      setZoomImage({
+                        url: mainImage,
+                        title: `Sản phẩm: ${group.master_name}`,
+                      })
+                    }
+                    className="relative w-14 h-14 sm:w-16 sm:h-16 rounded-xl bg-slate-800/80 border border-slate-700/60 overflow-hidden shrink-0 flex items-center justify-center cursor-zoom-in group/img"
+                    title="Nhấp chuột để xem ảnh phóng to"
+                  >
+                    {mainImage ? (
+                      <img src={mainImage} alt="" className="w-full h-full object-contain group-hover/img:scale-105 transition-transform" />
+                    ) : (
+                      <Boxes size={22} className="text-slate-600" />
+                    )}
+                    {printPng && (
+                      <img
+                        src={printPng}
+                        alt=""
+                        style={{
+                          left: `${firstPos.posX ?? (firstVariant?.blank_image_type === "combined" ? 28 : 50)}%`,
+                          top: `${firstPos.posY ?? 38}%`,
+                          width: `${firstPos.scale ?? (firstVariant?.blank_image_type === "combined" ? 35 : 45)}%`,
+                          transform: "translate(-50%, -50%)",
+                        }}
+                        className="absolute object-contain pointer-events-none"
+                      />
+                    )}
+                    {colorMockupImages.length > 1 && (
+                      <span className="absolute bottom-0.5 right-0.5 px-1 py-0.2 rounded bg-black/80 text-[9px] font-medium text-white flex items-center gap-0.5">
+                        <ImageIcon size={8} /> {colorSubGroups.length}
+                      </span>
+                    )}
+                    {group.video_url && (
+                      <span className="absolute top-0.5 left-0.5 p-0.5 rounded-full bg-brand-500/90 text-white">
+                        <Play size={8} className="fill-white" />
+                      </span>
+                    )}
                   </div>
 
-                  {/* BÊN PHẢI: Cụm Nút Thao tác (Media, Sửa, Xóa, Mở rộng Accordion) */}
-                  <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 ml-auto pt-2 md:pt-0">
-                    <button
-                      onClick={() => setPreviewGroup(group)}
-                      className="px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-xl text-slate-300 hover:bg-slate-800 hover:text-white transition-colors text-xs font-medium flex items-center gap-1 border border-slate-700/50"
-                      title="Xem album media"
+                  {/* Text info */}
+                  <div className="space-y-1 min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="font-mono text-[11px] sm:text-xs font-semibold px-2 py-0.5 rounded-md bg-brand-500/10 text-brand-400 border border-brand-500/20">
+                        {group.master_code}
+                      </span>
+                      {group.blank_type && (
+                        <span className="text-[11px] sm:text-xs px-2 py-0.5 rounded-md bg-slate-800 text-slate-400 border border-slate-700/50 truncate max-w-[120px] sm:max-w-none">
+                          Phôi: {group.blank_type.name}
+                        </span>
+                      )}
+                      {designsList.map((pd, idx) => (
+                        <span
+                          key={pd.id || idx}
+                          className="text-[11px] sm:text-xs px-2 py-0.5 rounded-md bg-slate-800/80 text-slate-300 border border-slate-700/50 flex items-center gap-1 truncate max-w-[160px] sm:max-w-none"
+                        >
+                          {pd.png_url && (
+                            <img
+                              src={pd.png_url}
+                              alt=""
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setZoomImage({
+                                  url: pd.png_url!,
+                                  title: `Hình in ${idx + 1}: ${pd.name}`,
+                                });
+                              }}
+                              className="w-4 h-4 object-contain rounded bg-slate-900 border border-slate-700 shrink-0 cursor-zoom-in"
+                            />
+                          )}
+                          <span className="truncate">{pd.name}</span>
+                        </span>
+                      ))}
+                    </div>
+
+                    <h3
+                      onClick={() => setDetailGroupKey(group.key)}
+                      className="text-sm sm:text-base font-bold text-slate-100 leading-snug truncate hover:text-brand-400 cursor-pointer transition-colors"
+                      title="Nhấp để xem chi tiết sản phẩm & biến thể"
                     >
-                      <Eye size={14} /> Media ({group.images?.length || 0})
-                    </button>
-                    <button
-                      onClick={() => setEditMasterGroup(group)}
-                      className="px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-xl text-amber-400 hover:bg-amber-500/10 transition-colors text-xs font-medium flex items-center gap-1 border border-amber-500/20"
-                      title="Sửa sản phẩm chung"
-                    >
-                      <Pencil size={14} /> Sửa
-                    </button>
-                    <button
-                      onClick={() => handleDeleteMasterGroup(group)}
-                      className="px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-xl text-rose-400 hover:bg-rose-500/10 transition-colors text-xs font-medium flex items-center gap-1 border border-rose-500/20"
-                      title="Xóa sản phẩm chung này"
-                    >
-                      <Trash2 size={14} /> Xóa
-                    </button>
-                    <button
-                      onClick={() =>
-                        setExpandedGroups((prev) => ({
-                          ...prev,
-                          [group.key]: !isExpanded,
-                        }))
-                      }
-                      className="p-2 rounded-xl text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition-colors border border-slate-700/50 ml-1"
-                      title={isExpanded ? "Thu gọn danh sách" : "Mở rộng danh sách phôi màu"}
-                    >
-                      {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                    </button>
+                      {group.master_name}
+                    </h3>
+
+                    <div className="flex items-center gap-2 sm:gap-3 text-xs text-slate-400 flex-wrap">
+                      <span className="text-emerald-400 font-bold text-xs sm:text-sm">
+                        {group.minPrice === group.maxPrice
+                          ? formatCurrency(group.minPrice)
+                          : `${formatCurrency(group.minPrice)} - ${formatCurrency(group.maxPrice)}`}
+                      </span>
+                      <span>•</span>
+                      <span className="bg-slate-800/90 text-slate-300 px-2 py-0.5 rounded-full text-[11px] font-medium border border-slate-700/40">
+                        🎨 {colorSubGroups.length} phôi màu • {group.variants.length} biến thể
+                      </span>
+                      {group.video_url && (
+                        <span className="text-indigo-400 flex items-center gap-1 text-[11px]">
+                          <Video size={11} /> Video
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
 
-                {/* Collapsible Color Sub-groups Section */}
-                {isExpanded && (
-                  <div className="p-3 sm:p-4 bg-slate-950/40 space-y-4">
-                    {colorSubGroups.map((cg) => {
-                      const rawBlankImage =
-                        cg.blank_image_type === "combined" && cg.blank_image_back
-                          ? cg.blank_image_back
-                          : cg.blank_image || cg.blank_image_back;
-                      const colorMockupImage = cg.preview_url || rawBlankImage;
-                      const isColorMockupDone = !!cg.preview_url;
-
-                      return (
-                        <div
-                          key={cg.color}
-                          className="rounded-xl bg-slate-900/80 border border-slate-800 overflow-hidden shadow-sm transition-all"
-                        >
-                          {/* Header Phôi Màu */}
-                          <div className="p-3 bg-slate-900 border-b border-slate-800 flex flex-wrap items-center justify-between gap-3">
-                            <div className="flex items-center gap-3">
-                              {/* Thumbnail Phôi Màu (Nhấp chuột phóng to) */}
-                              <div
-                                onClick={() =>
-                                  colorMockupImage &&
-                                  setZoomImage({
-                                    url: colorMockupImage,
-                                    title: `${group.master_name} - Phôi Màu ${formatColorName(cg.color)}`,
-                                  })
-                                }
-                                className="relative w-12 h-12 rounded-lg bg-slate-800 border border-slate-700/80 overflow-hidden shrink-0 flex items-center justify-center cursor-zoom-in group/subimg"
-                                title="Nhấp chuột xem ảnh phóng to phôi màu này"
-                              >
-                                {colorMockupImage ? (
-                                  <img src={colorMockupImage} alt="" className="w-full h-full object-contain group-hover/subimg:scale-105 transition-transform" />
-                                ) : (
-                                  <Boxes size={20} className="text-slate-600" />
-                                )}
-                                {!isColorMockupDone && group.print_design?.png_url && (
-                                  <img
-                                    src={group.print_design.png_url}
-                                    alt=""
-                                    style={{
-                                      left: `${(cg.variants[0]?.print_position?.posX ?? (cg.blank_image_type === "combined" ? 28 : 50))}%`,
-                                      top: `${(cg.variants[0]?.print_position?.posY ?? 38)}%`,
-                                      width: `${(cg.variants[0]?.print_position?.scale ?? (cg.blank_image_type === "combined" ? 35 : 45))}%`,
-                                      transform: "translate(-50%, -50%)",
-                                    }}
-                                    className="absolute object-contain pointer-events-none"
-                                  />
-                                )}
-                              </div>
-
-                              <div>
-                                <div className="flex items-center gap-2">
-                                  {rawBlankImage && (
-                                    <img
-                                      src={rawBlankImage}
-                                      alt=""
-                                      onClick={() =>
-                                        setZoomImage({
-                                          url: rawBlankImage,
-                                          title: `Phôi áo gốc: Màu ${formatColorName(cg.color)} (${cg.blank_image_type === "combined" ? "Hình 2: 2 Mặt" : "Hình 1: Mặt trước"})`,
-                                        })
-                                      }
-                                      className="w-5 h-5 object-contain rounded bg-slate-800 border border-slate-700 p-0.5 shrink-0 cursor-zoom-in hover:scale-125 transition-transform"
-                                      title="Nhấp chuột để phóng to phôi áo gốc"
-                                    />
-                                  )}
-                                  <span className="font-bold text-sm text-slate-100">Phôi Màu: {formatColorName(cg.color)}</span>
-                                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700 font-medium">
-                                    {cg.variants.length} size
-                                  </span>
-                                </div>
-                                <p className="text-xs text-slate-400 mt-0.5">
-                                  Các size: {cg.variants.map((v) => v.blanks?.size).join(", ")}
-                                </p>
-                              </div>
-                            </div>
-
-                            <button
-                              onClick={() => {
-                                const list = group.print_designs_list && group.print_designs_list.length > 0
-                                  ? group.print_designs_list
-                                  : group.print_design
-                                  ? [group.print_design]
-                                  : [];
-
-                                const targetDesigns = list.map((d) => ({
-                                  id: d.id,
-                                  code: d.code,
-                                  name: d.name,
-                                  url: d.png_url,
-                                }));
-
-                                setMockupEditorTarget({
-                                  masterCode: `${group.master_code}-${cg.color}`,
-                                  colorName: formatColorName(cg.color),
-                                  blankImageUrl: cg.blank_image,
-                                  blankImageBackUrl: cg.blank_image_back,
-                                  printDesignUrl: group.print_design?.png_url || null,
-                                  printDesigns: targetDesigns,
-                                  variantIds: cg.variants.map((v) => v.id),
-                                  allColorSubGroups: colorSubGroups.map((c) => ({
-                                    color: c.color,
-                                    blank_image: c.blank_image,
-                                    blank_image_back: c.blank_image_back,
-                                    blank_image_type: c.blank_image_type,
-                                    variantIds: c.variants.map((v) => v.id),
-                                  })),
-                                  initialPosition: cg.variants.find((v) => v.print_position)?.print_position || cg.variants[0]?.print_position || null,
-                                  initialPositions: cg.variants.find((v) => v.print_positions)?.print_positions || null,
-                                  initialImageType: cg.blank_image_type || "front",
-                                });
-                              }}
-                              className="px-3 py-1.5 rounded-xl bg-brand-500/10 text-brand-400 hover:bg-brand-500/20 transition-colors text-xs font-semibold flex items-center gap-1.5 border border-brand-500/30"
-                              title={`Kéo thả & Chỉnh vị trí hình in riêng cho áo màu ${formatColorName(cg.color)}`}
-                            >
-                              <Sparkles size={14} /> Chỉnh vị trí (Màu {formatColorName(cg.color)})
-                            </button>
-                          </div>
-
-                          {/* Bảng danh sách Size của phôi màu này */}
-                          <div className="overflow-x-auto">
-                            <table className="w-full text-left text-xs min-w-[500px]">
-                              <thead>
-                                <tr className="border-b border-slate-800/60 text-slate-400 uppercase font-medium bg-slate-950/20">
-                                  <th className="px-4 py-2">Mã biến thể</th>
-                                  <th className="px-4 py-2">Kích thước</th>
-                                  <th className="px-4 py-2 text-right">Giá phôi</th>
-                                  <th className="px-4 py-2 text-right">Giá bán</th>
-                                  <th className="px-4 py-2 text-center">Trạng thái</th>
-                                  <th className="px-4 py-2 text-right">Thao tác</th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-slate-800/40">
-                                {cg.variants.map((v) => (
-                                  <tr key={v.id} className="hover:bg-slate-800/20 transition-colors">
-                                    <td className="px-4 py-2 font-mono text-brand-400 font-medium whitespace-nowrap">
-                                      {v.code}
-                                    </td>
-                                    <td className="px-4 py-2 text-slate-200">
-                                      <span className="inline-flex items-center px-2 py-0.5 rounded bg-slate-800 border border-slate-700 font-medium">
-                                        {v.blanks?.size || "-"}
-                                      </span>
-                                    </td>
-                                    <td className="px-4 py-2 text-right text-slate-400 font-mono whitespace-nowrap">
-                                      {formatCurrency(Number(v.blanks?.price || 0))}
-                                    </td>
-                                    <td className="px-4 py-2 text-right text-slate-100 font-bold font-mono whitespace-nowrap">
-                                      {formatCurrency(Number(v.price))}
-                                    </td>
-                                    <td className="px-4 py-2 text-center">
-                                      <span
-                                        className={`px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap ${
-                                          v.status === "active"
-                                            ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
-                                            : "bg-slate-800 text-slate-400 border border-slate-700"
-                                        }`}
-                                      >
-                                        {v.status === "active" ? "Đang bán" : "Tạm dừng"}
-                                      </span>
-                                    </td>
-                                    <td className="px-4 py-2 text-right">
-                                      <div className="flex items-center justify-end gap-1">
-                                        <button
-                                          onClick={() => setPreviewItem(v)}
-                                          className="p-1.5 rounded-lg text-slate-400 hover:text-brand-400 hover:bg-brand-500/10"
-                                          title="Xem preview biến thể"
-                                        >
-                                          <Eye size={14} />
-                                        </button>
-                                        <button
-                                          onClick={() => openEditVariant(v)}
-                                          className="p-1.5 rounded-lg text-slate-400 hover:text-amber-400 hover:bg-amber-500/10"
-                                          title="Sửa giá"
-                                        >
-                                          <Pencil size={14} />
-                                        </button>
-                                        <button
-                                          onClick={() => handleDeleteVariant(v)}
-                                          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10"
-                                          title="Xóa"
-                                        >
-                                          <Trash2 size={14} />
-                                        </button>
-                                      </div>
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
+                {/* Right: Actions */}
+                <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 ml-auto md:ml-0 pt-2 md:pt-0 w-full md:w-auto justify-end border-t md:border-t-0 border-slate-800/60">
+                  <button
+                    onClick={() => setDetailGroupKey(group.key)}
+                    className="px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-xl bg-brand-500/15 text-brand-400 hover:bg-brand-500 hover:text-white transition-all text-xs font-semibold flex items-center gap-1.5 border border-brand-500/30 shadow-sm cursor-pointer"
+                    title="Xem chi tiết sản phẩm và danh sách biến thể"
+                  >
+                    <Eye size={14} /> Xem biến thể ({group.variants.length})
+                  </button>
+                  <button
+                    onClick={() => setPreviewGroup(group)}
+                    className="px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-xl text-slate-300 hover:bg-slate-800 hover:text-white transition-colors text-xs font-medium flex items-center gap-1 border border-slate-700/50"
+                    title="Xem album media"
+                  >
+                    <ImageIcon size={14} /> Media ({group.images?.length || 0})
+                  </button>
+                  <button
+                    onClick={() => setEditMasterGroup(group)}
+                    className="px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-xl text-amber-400 hover:bg-amber-500/10 transition-colors text-xs font-medium flex items-center gap-1 border border-amber-500/20"
+                    title="Sửa sản phẩm chung"
+                  >
+                    <Pencil size={14} /> Sửa
+                  </button>
+                  <button
+                    onClick={() => handleDeleteMasterGroup(group)}
+                    className="px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-xl text-rose-400 hover:bg-rose-500/10 transition-colors text-xs font-medium flex items-center gap-1 border border-rose-500/20"
+                    title="Xóa sản phẩm chung này"
+                  >
+                    <Trash2 size={14} /> Xóa
+                  </button>
+                </div>
               </div>
             );
           })}
@@ -1022,6 +825,25 @@ export function ProductsPage() {
         imageUrl={zoomImage?.url || null}
         title={zoomImage?.title}
       />
+
+      {/* Master Product Detail & Variants Modal */}
+      {activeDetailGroup && (
+        <MasterProductDetailModal
+          group={activeDetailGroup}
+          onClose={() => setDetailGroupKey(null)}
+          onEditMaster={(g) => setEditMasterGroup(g)}
+          onMediaMaster={(g) => setPreviewGroup(g)}
+          onDeleteMaster={(g) => {
+            handleDeleteMasterGroup(g);
+            setDetailGroupKey(null);
+          }}
+          onEditVariant={(v) => openEditVariant(v)}
+          onDeleteVariant={(v) => handleDeleteVariant(v)}
+          onPreviewVariant={(v) => setPreviewItem(v)}
+          onOpenMockupEditor={(target) => setMockupEditorTarget(target)}
+          onZoomImage={(data) => setZoomImage(data)}
+        />
+      )}
 
       {/* Edit Single Variant Price & Status Modal */}
       <Modal open={!!editItem} onClose={() => setEditItem(null)} title="Sửa thông tin biến thể">
@@ -1180,7 +1002,7 @@ function CreateMasterProductModal({
     if (selectedBlankType && selectedDesigns.length > 0) {
       const designNames = selectedDesigns.map((d) => d.name).join(" + ");
       const designCodes = selectedDesigns.map((d) => d.code).join("+");
-      setMasterName(`${selectedBlankType.name} - ${designNames}`);
+      setMasterName(`MEO BAO ${selectedBlankType.name} ${designNames}`);
       setMasterCode(`${selectedBlankType.code}-${designCodes}`);
     }
   }, [blankTypeId, printDesignId, printDesignId2, printDesignId3]);
@@ -1333,10 +1155,17 @@ function CreateMasterProductModal({
 
       const defaultPosition =
         blankImageType === "combined"
-          ? { posX: 28, posY: 38, scale: 35 }
+          ? { posX: selectedDesign?.is_back ? 72 : 28, posY: 38, scale: 35 }
           : { posX: 50, posY: 38, scale: 45 };
 
       const selectedDesignIds = [printDesignId, printDesignId2, printDesignId3].filter(Boolean);
+      const posMap: Record<string, PrintPositionData> = {};
+      selectedDesigns.forEach((d, idx) => {
+        const posX = blankImageType === "combined" ? (d.is_back ? 72 : (idx === 1 ? 72 : 28)) : idx === 1 ? 38 : 50;
+        const posY = idx === 2 ? 65 : 38;
+        const scale = blankImageType === "combined" ? 35 : idx === 1 ? 25 : 45;
+        posMap[d.id] = { posX, posY, scale, visible: true };
+      });
 
       const rows = toCreate.map((v) => ({
         master_name: masterName.trim(),
@@ -1348,6 +1177,7 @@ function CreateMasterProductModal({
         print_design_ids: selectedDesignIds,
         blank_image_type: blankImageType,
         print_position: defaultPosition,
+        print_positions: posMap,
         price: Number(v.price) || 0,
         images: images,
         video_url: videoUrl.trim() || null,
@@ -1465,7 +1295,7 @@ function CreateMasterProductModal({
                     <option value="">-- Hình 1 (Bắt buộc) --</option>
                     {designs.map((d) => (
                       <option key={d.id} value={d.id}>
-                        {d.code} — {d.name}
+                        {d.code} — {d.name} {d.is_back ? "(Mặt sau)" : ""}
                       </option>
                     ))}
                   </select>
@@ -1483,7 +1313,7 @@ function CreateMasterProductModal({
                     <option value="">-- Không dùng --</option>
                     {designs.map((d) => (
                       <option key={d.id} value={d.id}>
-                        {d.code} — {d.name}
+                        {d.code} — {d.name} {d.is_back ? "(Mặt sau)" : ""}
                       </option>
                     ))}
                   </select>
@@ -1501,7 +1331,7 @@ function CreateMasterProductModal({
                     <option value="">-- Không dùng --</option>
                     {designs.map((d) => (
                       <option key={d.id} value={d.id}>
-                        {d.code} — {d.name}
+                        {d.code} — {d.name} {d.is_back ? "(Mặt sau)" : ""}
                       </option>
                     ))}
                   </select>
@@ -2230,5 +2060,390 @@ function ProductPreview({ product }: { product: Product }) {
         </div>
       </div>
     </div>
+  );
+}
+
+/* Modal Chi Tiết Sản Phẩm & Danh Sách Biến Thể Theo Phôi Màu */
+function MasterProductDetailModal({
+  group,
+  logos,
+  onClose,
+  onEditMaster,
+  onMediaMaster,
+  onDeleteMaster,
+  onEditVariant,
+  onDeleteVariant,
+  onPreviewVariant,
+  onOpenMockupEditor,
+  onZoomImage,
+}: {
+  group: MasterProductGroup;
+  logos: LogoItem[];
+  onClose: () => void;
+  onEditMaster: (group: MasterProductGroup) => void;
+  onMediaMaster: (group: MasterProductGroup) => void;
+  onDeleteMaster: (group: MasterProductGroup) => void;
+  onEditVariant: (v: Product) => void;
+  onDeleteVariant: (v: Product) => void;
+  onPreviewVariant: (v: Product) => void;
+  onOpenMockupEditor: (target: MockupEditorTarget) => void;
+  onZoomImage: (data: { url: string; title: string }) => void;
+}) {
+  const colorSubGroups = getColorSubGroups(group.variants);
+  const colorMockupImages = colorSubGroups
+    .map((cg) => {
+      const rawBlankImage =
+        cg.blank_image_type === "combined" && cg.blank_image_back
+          ? cg.blank_image_back
+          : cg.blank_image || cg.blank_image_back;
+      return cg.preview_url || rawBlankImage;
+    })
+    .filter(Boolean) as string[];
+
+  const firstSubGroup = colorSubGroups[0];
+  const firstVariant = group.variants[0];
+  const firstRawBlankImage = firstSubGroup
+    ? firstSubGroup.blank_image_type === "combined" && firstSubGroup.blank_image_back
+      ? firstSubGroup.blank_image_back
+      : firstSubGroup.blank_image || firstSubGroup.blank_image_back
+    : null;
+
+  const mainImage = firstSubGroup?.preview_url || firstRawBlankImage || colorMockupImages[0] || null;
+  const hasRenderedMockup = !!firstSubGroup?.preview_url;
+  const printPng = hasRenderedMockup ? null : group.print_design?.png_url;
+
+  const firstPos = firstVariant?.print_position || (
+    firstVariant?.blank_image_type === "combined"
+      ? { posX: 28, posY: 38, scale: 35 }
+      : { posX: 50, posY: 38, scale: 45 }
+  );
+
+  const designsList = (
+    group.print_designs_list && group.print_designs_list.length > 0
+      ? group.print_designs_list
+      : group.print_design
+      ? [group.print_design]
+      : []
+  ).filter((pd): pd is PrintDesign => Boolean(pd && pd.name));
+
+  return (
+    <Modal open={true} onClose={onClose} title="Chi tiết Sản phẩm & Danh sách Biến thể" size="xl">
+      <div className="space-y-4 text-xs">
+        {/* Banner Tổng quan sản phẩm */}
+        <div className="p-3.5 sm:p-4 rounded-xl bg-slate-950/70 border border-slate-800 flex flex-col sm:flex-row gap-3.5 items-start sm:items-center justify-between">
+          <div className="flex gap-3.5 items-center min-w-0 flex-1">
+            <div
+              onClick={() =>
+                mainImage &&
+                onZoomImage({
+                  url: mainImage,
+                  title: `Sản phẩm: ${group.master_name}`,
+                })
+              }
+              className="relative w-16 h-16 sm:w-20 sm:h-20 rounded-xl bg-slate-900 border border-slate-700/80 overflow-hidden shrink-0 flex items-center justify-center cursor-zoom-in group/img"
+              title="Nhấp chuột xem ảnh HD"
+            >
+              {mainImage ? (
+                <img src={mainImage} alt="" className="w-full h-full object-contain group-hover/img:scale-105 transition-transform" />
+              ) : (
+                <Boxes size={24} className="text-slate-600" />
+              )}
+              {printPng && (
+                <img
+                  src={printPng}
+                  alt=""
+                  style={{
+                    left: `${firstPos.posX ?? (firstVariant?.blank_image_type === "combined" ? 28 : 50)}%`,
+                    top: `${firstPos.posY ?? 38}%`,
+                    width: `${firstPos.scale ?? (firstVariant?.blank_image_type === "combined" ? 35 : 45)}%`,
+                    transform: "translate(-50%, -50%)",
+                  }}
+                  className="absolute object-contain pointer-events-none"
+                />
+              )}
+            </div>
+
+            <div className="space-y-1.5 min-w-0 flex-1">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="font-mono text-xs font-bold px-2.5 py-0.5 rounded-md bg-brand-500/10 text-brand-400 border border-brand-500/20">
+                  {group.master_code}
+                </span>
+                {group.blank_type && (
+                  <span className="px-2 py-0.5 rounded-md bg-slate-800 text-slate-300 border border-slate-700/60 font-medium">
+                    Phôi: {group.blank_type.name}
+                  </span>
+                )}
+                {designsList.map((pd, idx) => (
+                  <span
+                    key={pd.id || idx}
+                    className="px-2.5 py-0.5 rounded-md bg-slate-800 text-slate-200 border border-slate-700/60 flex items-center gap-1 font-medium"
+                  >
+                    {pd.png_url && (
+                      <img
+                        src={pd.png_url}
+                        alt=""
+                        onClick={() =>
+                          onZoomImage({
+                            url: pd.png_url!,
+                            title: `Hình in ${idx + 1}: ${pd.name}`,
+                          })
+                        }
+                        className="w-4 h-4 object-contain rounded bg-slate-900 border border-slate-700 cursor-zoom-in"
+                        title="Phóng to hình in"
+                      />
+                    )}
+                    <span>Hình {idx + 1}: <strong>{pd.name}</strong></span>
+                  </span>
+                ))}
+              </div>
+
+              <h2 className="text-base sm:text-lg font-bold text-slate-100 truncate">
+                {group.master_name}
+              </h2>
+
+              <div className="flex items-center gap-2 sm:gap-3 text-xs text-slate-400 flex-wrap">
+                <span className="text-emerald-400 font-bold text-sm">
+                  {group.minPrice === group.maxPrice
+                    ? formatCurrency(group.minPrice)
+                    : `${formatCurrency(group.minPrice)} - ${formatCurrency(group.maxPrice)}`}
+                </span>
+                <span>•</span>
+                <span className="bg-slate-800 text-slate-300 px-2.5 py-0.5 rounded-full font-medium">
+                  🎨 {colorSubGroups.length} phôi màu ({group.variants.length} biến thể size)
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0 sm:self-center">
+            <button
+              onClick={() => onMediaMaster(group)}
+              className="px-3 py-2 rounded-xl text-slate-200 bg-slate-800 hover:bg-slate-700 transition-colors font-medium flex items-center gap-1.5 border border-slate-700 cursor-pointer"
+            >
+              <ImageIcon size={14} /> Media ({group.images?.length || 0})
+            </button>
+            <button
+              onClick={() => onEditMaster(group)}
+              className="px-3 py-2 rounded-xl text-amber-400 bg-amber-500/10 hover:bg-amber-500/20 transition-colors font-medium flex items-center gap-1.5 border border-amber-500/30 cursor-pointer"
+            >
+              <Pencil size={14} /> Sửa SP chung
+            </button>
+          </div>
+        </div>
+
+        {/* Danh sách biến thể theo Phôi Màu */}
+        <div className="space-y-3 pt-1">
+          <div className="flex items-center justify-between">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+              <Layers size={14} className="text-brand-400" /> Các phôi màu & Biến thể size ({colorSubGroups.length} phôi màu)
+            </h4>
+          </div>
+
+          <div className="space-y-3.5 max-h-[58vh] overflow-y-auto pr-1 custom-scrollbar">
+            {colorSubGroups.map((cg) => {
+              const rawBlankImage =
+                cg.blank_image_type === "combined" && cg.blank_image_back
+                  ? cg.blank_image_back
+                  : cg.blank_image || cg.blank_image_back;
+              const colorMockupImage = cg.preview_url || rawBlankImage;
+              const isColorMockupDone = !!cg.preview_url;
+
+              return (
+                <div
+                  key={cg.color}
+                  className="rounded-xl bg-slate-900/90 border border-slate-800 overflow-hidden shadow-sm transition-all"
+                >
+                  {/* Header Phôi Màu */}
+                  <div className="p-3 bg-slate-900 border-b border-slate-800 flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      {/* Thumbnail Phôi Màu */}
+                      <div
+                        onClick={() =>
+                          colorMockupImage &&
+                          onZoomImage({
+                            url: colorMockupImage,
+                            title: `${group.master_name} - Phôi Màu ${formatColorName(cg.color)}`,
+                          })
+                        }
+                        className="relative w-12 h-12 rounded-lg bg-slate-800 border border-slate-700/80 overflow-hidden shrink-0 flex items-center justify-center cursor-zoom-in group/subimg"
+                        title="Nhấp chuột xem ảnh phóng to phôi màu này"
+                      >
+                        {colorMockupImage ? (
+                          <img src={colorMockupImage} alt="" className="w-full h-full object-contain group-hover/subimg:scale-105 transition-transform" />
+                        ) : (
+                          <Boxes size={20} className="text-slate-600" />
+                        )}
+                        {!isColorMockupDone && group.print_design?.png_url && (
+                          <img
+                            src={group.print_design.png_url}
+                            alt=""
+                            style={{
+                              left: `${(cg.variants[0]?.print_position?.posX ?? (cg.blank_image_type === "combined" ? 28 : 50))}%`,
+                              top: `${(cg.variants[0]?.print_position?.posY ?? 38)}%`,
+                              width: `${(cg.variants[0]?.print_position?.scale ?? (cg.blank_image_type === "combined" ? 35 : 45))}%`,
+                              transform: "translate(-50%, -50%)",
+                            }}
+                            className="absolute object-contain pointer-events-none"
+                          />
+                        )}
+                      </div>
+
+                      <div>
+                        <div className="flex items-center gap-2">
+                          {rawBlankImage && (
+                            <img
+                              src={rawBlankImage}
+                              alt=""
+                              onClick={() =>
+                                onZoomImage({
+                                  url: rawBlankImage,
+                                  title: `Phôi áo gốc: Màu ${formatColorName(cg.color)} (${cg.blank_image_type === "combined" ? "Hình 2: 2 Mặt" : "Hình 1: Mặt trước"})`,
+                                })
+                              }
+                              className="w-5 h-5 object-contain rounded bg-slate-800 border border-slate-700 p-0.5 shrink-0 cursor-zoom-in hover:scale-125 transition-transform"
+                              title="Nhấp chuột để phóng to phôi áo gốc"
+                            />
+                          )}
+                          <span className="font-bold text-sm text-slate-100">Phôi Màu: {formatColorName(cg.color)}</span>
+                          <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700 font-medium">
+                            {cg.variants.length} size
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-400 mt-0.5">
+                          Các size: {cg.variants.map((v) => v.blanks?.size).join(", ")}
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => {
+                        const list = group.print_designs_list && group.print_designs_list.length > 0
+                          ? group.print_designs_list
+                          : group.print_design
+                          ? [group.print_design]
+                          : [];
+
+                        const targetDesigns = list.map((d) => ({
+                          id: d.id,
+                          code: d.code,
+                          name: d.name,
+                          url: d.png_url,
+                        }));
+
+                        onOpenMockupEditor({
+                          masterCode: `${group.master_code}-${cg.color}`,
+                          colorName: formatColorName(cg.color),
+                          blankImageUrl: cg.blank_image,
+                          blankImageBackUrl: cg.blank_image_back,
+                          printDesignUrl: group.print_design?.png_url || null,
+                          printDesigns: targetDesigns,
+                          variantIds: cg.variants.map((v) => v.id),
+                          allColorSubGroups: colorSubGroups.map((c) => ({
+                            color: c.color,
+                            blank_image: c.blank_image,
+                            blank_image_back: c.blank_image_back,
+                            blank_image_type: c.blank_image_type,
+                            variantIds: c.variants.map((v) => v.id),
+                          })),
+                          initialPosition: cg.variants.find((v) => v.print_position)?.print_position || cg.variants[0]?.print_position || null,
+                          initialPositions: cg.variants.find((v) => v.print_positions)?.print_positions || null,
+                          initialImageType: cg.blank_image_type || "front",
+                        });
+                      }}
+                      className="px-3 py-1.5 rounded-xl bg-brand-500/10 text-brand-400 hover:bg-brand-500/20 transition-colors text-xs font-semibold flex items-center gap-1.5 border border-brand-500/30 cursor-pointer"
+                      title={`Kéo thả & Chỉnh vị trí hình in riêng cho áo màu ${formatColorName(cg.color)}`}
+                    >
+                      <Sparkles size={14} /> Chỉnh vị trí hình in (Màu {formatColorName(cg.color)})
+                    </button>
+                  </div>
+
+                  {/* Bảng danh sách Size của phôi màu này */}
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs min-w-[500px]">
+                      <thead>
+                        <tr className="border-b border-slate-800/60 text-slate-400 uppercase font-medium bg-slate-950/40">
+                          <th className="px-4 py-2.5">Mã biến thể</th>
+                          <th className="px-4 py-2.5">Kích thước</th>
+                          <th className="px-4 py-2.5 text-right">Giá phôi</th>
+                          <th className="px-4 py-2.5 text-right">Giá bán</th>
+                          <th className="px-4 py-2.5 text-center">Trạng thái</th>
+                          <th className="px-4 py-2.5 text-right">Thao tác</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/40">
+                        {cg.variants.map((v) => (
+                          <tr key={v.id} className="hover:bg-slate-800/30 transition-colors">
+                            <td className="px-4 py-2.5 font-mono text-brand-400 font-medium whitespace-nowrap">
+                              {v.code}
+                            </td>
+                            <td className="px-4 py-2.5 text-slate-200">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded bg-slate-800 border border-slate-700 font-medium">
+                                {v.blanks?.size || "-"}
+                              </span>
+                            </td>
+                            <td className="px-4 py-2.5 text-right text-slate-400 font-mono whitespace-nowrap">
+                              {formatCurrency(Number(v.blanks?.price || 0))}
+                            </td>
+                            <td className="px-4 py-2.5 text-right text-slate-100 font-bold font-mono whitespace-nowrap">
+                              {formatCurrency(Number(v.price))}
+                            </td>
+                            <td className="px-4 py-2.5 text-center">
+                              <span
+                                className={`px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap ${
+                                  v.status === "active"
+                                    ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+                                    : "bg-slate-800 text-slate-400 border border-slate-700"
+                                }`}
+                              >
+                                {v.status === "active" ? "Đang bán" : "Tạm dừng"}
+                              </span>
+                            </td>
+                            <td className="px-4 py-2.5 text-right">
+                              <div className="flex items-center justify-end gap-1">
+                                <button
+                                  onClick={() => onPreviewVariant(v)}
+                                  className="p-1.5 rounded-lg text-slate-400 hover:text-brand-400 hover:bg-brand-500/10 transition-colors"
+                                  title="Xem preview biến thể"
+                                >
+                                  <Eye size={14} />
+                                </button>
+                                <button
+                                  onClick={() => onEditVariant(v)}
+                                  className="p-1.5 rounded-lg text-slate-400 hover:text-amber-400 hover:bg-amber-500/10 transition-colors"
+                                  title="Sửa giá"
+                                >
+                                  <Pencil size={14} />
+                                </button>
+                                <button
+                                  onClick={() => onDeleteVariant(v)}
+                                  className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+                                  title="Xóa biến thể này"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Modal Footer */}
+        <div className="flex justify-end pt-3 border-t border-slate-800">
+          <button
+            onClick={onClose}
+            className="px-5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium transition-colors cursor-pointer"
+          >
+            Đóng
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }

@@ -263,7 +263,7 @@ export function QuickCreateModal({
 
     return selectedDesigns.map((d) => {
       const masterCode = `${selectedBlankType.code}-${d.code}`;
-      const masterName = `${selectedBlankType.name} - ${d.name}`;
+      const masterName = `MEO BAO ${selectedBlankType.name} ${d.name}`;
 
       const existing = existingProducts.find(
         (p) =>
@@ -334,7 +334,12 @@ export function QuickCreateModal({
 
         // Xây dựng map vị trí chuẩn cho từng hình in & logo của sản phẩm mới này
         const itemPositionsMap: Record<string, PrintPositionData> = {};
-        itemPositionsMap[item.design.id] = { ...targetPosition };
+        const posForDesign = selectedTemplate?.pos || (
+          item.design.is_back && blankImageType === "combined"
+            ? { posX: 72, posY: 38, scale: 35, visible: true }
+            : defaultPosition
+        );
+        itemPositionsMap[item.design.id] = { ...posForDesign };
 
         if (enableLogo && currentSelectedLogo) {
           const baseLogoPos = targetPositionsMap?.["logo"] || {
@@ -498,7 +503,14 @@ export function QuickCreateModal({
                         <ImageIcon size={18} className="text-slate-600 shrink-0" />
                       )}
                       <div className="min-w-0 truncate">
-                        <p className="font-medium truncate text-xs">{d.name}</p>
+                        <div className="flex items-center gap-1.5 truncate">
+                          <p className="font-medium truncate text-xs">{d.name}</p>
+                          {d.is_back && (
+                            <span className="px-1 py-0.2 rounded bg-amber-500/20 text-amber-300 text-[9px] font-semibold shrink-0 border border-amber-500/30">
+                              Mặt sau
+                            </span>
+                          )}
+                        </div>
                         <p className="font-mono text-[10px] text-slate-400">{d.code}</p>
                       </div>
                     </div>

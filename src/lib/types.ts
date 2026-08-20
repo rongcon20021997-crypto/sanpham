@@ -67,6 +67,7 @@ export interface PrintDesign {
   thumbnail_url: string | null;
   tags: string[] | null;
   notes: string | null;
+  is_back?: boolean | null;
   created_at: string;
 }
 
