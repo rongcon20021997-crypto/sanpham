@@ -40,6 +40,18 @@ import {
   EyeOff,
 } from "lucide-react";
 
+import { supabase } from "@/lib/supabase";
+
+interface WebhookLog {
+  id: string;
+  shop_id: string | null;
+  code: number;
+  topic: string;
+  payload: any;
+  ip: string;
+  created_at: string;
+}
+
 interface ShopeeShopsPageProps {
   onNavigateToSettings?: () => void;
 }
@@ -48,6 +60,12 @@ export function ShopeeShopsPage({ onNavigateToSettings }: ShopeeShopsPageProps) 
   const [appConfig, setAppConfig] = useState<ShopeeAppConfig>(getShopeeAppConfig());
   const [shops, setShops] = useState<ShopeeShop[]>(getShopeeShops());
   const [loading, setLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState<"shops" | "webhook-logs">("shops");
+
+  // Webhook logs state
+  const [webhookLogs, setWebhookLogs] = useState<WebhookLog[]>([]);
+  const [loadingLogs, setLoadingLogs] = useState(false);
+  const [selectedLogPayload, setSelectedLogPayload] = useState<any | null>(null);
 
   // Auth link & code exchange
   const [authUrl, setAuthUrl] = useState("");
@@ -96,8 +114,27 @@ export function ShopeeShopsPage({ onNavigateToSettings }: ShopeeShopsPageProps) 
     }
   }
 
+  async function loadWebhookLogs() {
+    setLoadingLogs(true);
+    try {
+      const { data, error } = await supabase
+        .from("shopee_webhook_logs")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(100);
+      if (!error && data) {
+        setWebhookLogs(data as WebhookLog[]);
+      }
+    } catch (e) {
+      console.warn("Lỗi tải logs webhook:", e);
+    } finally {
+      setLoadingLogs(false);
+    }
+  }
+
   useEffect(() => {
     loadDataFromSupabase();
+    loadWebhookLogs();
   }, []);
 
   async function refreshShopList() {
@@ -327,90 +364,208 @@ export function ShopeeShopsPage({ onNavigateToSettings }: ShopeeShopsPageProps) 
         </div>
       </div>
 
-      {/* AUTH LINK & CODE EXCHANGE BOX */}
-      {authUrl && (
-        <div className="p-5 rounded-2xl bg-slate-900 border border-orange-500/40 space-y-4 animate-fade-in shadow-xl">
-          <div className="flex items-center justify-between">
-            <span className="font-bold text-xs sm:text-sm text-orange-400 flex items-center gap-1.5">
-              <ExternalLink size={16} /> Link ủy quyền gian hàng Shopee (OAuth2 Authorization):
-            </span>
-            <a
-              href={authUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="px-3.5 py-1.5 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold flex items-center gap-1.5 transition-colors shadow-lg shadow-orange-500/20"
-            >
-              <span>Mở trang Shopee để cấp quyền</span>
-              <ExternalLink size={13} />
-            </a>
-          </div>
+      {/* Tab Navigation */}
+      <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
+        <button
+          type="button"
+          onClick={() => setActiveTab("shops")}
+          className={`px-4 py-2 rounded-xl font-bold text-xs flex items-center gap-2 transition-all cursor-pointer ${
+            activeTab === "shops"
+              ? "bg-brand-500 text-white shadow-lg shadow-brand-500/20"
+              : "bg-slate-900 text-slate-400 hover:text-slate-200"
+          }`}
+        >
+          <Store size={15} />
+          <span>Danh sách Gian hàng ({shops.length})</span>
+        </button>
 
-          <p className="text-xs text-slate-400">
-            1. Bấm nút màu cam bên trên để mở cửa sổ Shopee đăng nhập tài khoản Shop và nhấn <strong>Xác nhận</strong>.<br />
-            2. Sau khi Shopee cấp quyền thành công, copy mã <strong>Code</strong> & <strong>Shop ID</strong> dán vào form bên dưới:
-          </p>
+        <button
+          type="button"
+          onClick={() => {
+            setActiveTab("webhook-logs");
+            loadWebhookLogs();
+          }}
+          className={`px-4 py-2 rounded-xl font-bold text-xs flex items-center gap-2 transition-all cursor-pointer ${
+            activeTab === "webhook-logs"
+              ? "bg-brand-500 text-white shadow-lg shadow-brand-500/20"
+              : "bg-slate-900 text-slate-400 hover:text-slate-200"
+          }`}
+        >
+          <RefreshCw size={14} className={loadingLogs ? "animate-spin text-emerald-400" : "text-emerald-400"} />
+          <span>Nhật ký Webhook nhận từ Shopee ({webhookLogs.length})</span>
+        </button>
+      </div>
 
-          <div className="flex gap-2">
-            <input
-              type="text"
-              readOnly
-              value={authUrl}
-              className="w-full px-3.5 py-2 rounded-xl bg-slate-950 text-slate-300 text-xs font-mono border border-slate-800 select-all"
-            />
-            <button
-              type="button"
-              onClick={() => {
-                navigator.clipboard.writeText(authUrl);
-                setCopiedLink(true);
-                setTimeout(() => setCopiedLink(false), 2000);
-              }}
-              className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 flex items-center gap-1 shrink-0 cursor-pointer"
-            >
-              {copiedLink ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
-              <span>{copiedLink ? "Đã chép" : "Sao chép"}</span>
-            </button>
-          </div>
-
-          {/* Form đổi Code */}
-          <div className="pt-3 border-t border-slate-800 space-y-2">
-            <label className="block text-xs font-semibold text-slate-200">
-              Nhập mã ủy quyền từ Shopee để thêm Shop vào hệ thống:
-            </label>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-              <input
-                type="text"
-                value={exchangeShopId}
-                onChange={(e) => setExchangeShopId(e.target.value.trim())}
-                placeholder="Shop ID (Mã gian hàng) *"
-                className="px-3.5 py-2 rounded-xl bg-slate-950 text-slate-100 text-xs font-mono border border-slate-800 outline-none focus:border-brand-500"
-              />
-              <input
-                type="text"
-                value={exchangeShopName}
-                onChange={(e) => setExchangeShopName(e.target.value)}
-                placeholder="Tên shop gợi nhớ (Tùy chọn)"
-                className="px-3.5 py-2 rounded-xl bg-slate-950 text-slate-100 text-xs border border-slate-800 outline-none focus:border-brand-500"
-              />
-              <input
-                type="text"
-                value={exchangeCode}
-                onChange={(e) => setExchangeCode(e.target.value.trim())}
-                placeholder="Mã Code từ Shopee *"
-                className="px-3.5 py-2 rounded-xl bg-slate-950 text-slate-100 text-xs font-mono border border-slate-800 outline-none focus:border-brand-500"
-              />
+      {/* WEBHOOK LOGS TAB */}
+      {activeTab === "webhook-logs" && (
+        <div className="card-gradient rounded-2xl border border-slate-700/50 p-6 space-y-4 animate-fade-in">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <h3 className="font-semibold text-slate-100 text-base mb-1 flex items-center gap-2">
+                <RefreshCw size={18} className="text-emerald-400" /> Nhật ký Sự kiện Webhook Shopee (Push Notifications)
+              </h3>
+              <p className="text-xs text-slate-400">
+                Toàn bộ thông báo đẩy, thay đổi trạng thái đơn hàng, sản phẩm hoặc kiểm tra từ Shopee gửi về hệ thống.
+              </p>
             </div>
+
             <button
               type="button"
-              onClick={handleExchangeAuthCode}
-              disabled={exchanging || !exchangeCode.trim() || !exchangeShopId.trim()}
-              className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-lg shadow-emerald-600/20 transition-all flex items-center justify-center gap-1.5 disabled:opacity-50 cursor-pointer mt-2"
+              onClick={loadWebhookLogs}
+              disabled={loadingLogs}
+              className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 text-xs font-semibold border border-slate-700 flex items-center gap-1.5 cursor-pointer shadow-sm disabled:opacity-50"
             >
-              {exchanging ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />}
-              <span>{exchanging ? "Đang đổi Token..." : "⚡ Đổi Token & Thêm Ngay Shop Vào Danh Sách"}</span>
+              <RefreshCw size={14} className={loadingLogs ? "animate-spin text-emerald-400" : ""} />
+              <span>{loadingLogs ? "Đang tải..." : "Tải lại Logs"}</span>
             </button>
           </div>
+
+          {webhookLogs.length === 0 ? (
+            <div className="p-10 text-center rounded-2xl bg-slate-900/50 border border-dashed border-slate-800 space-y-2">
+              <RefreshCw size={32} className="mx-auto text-slate-600" />
+              <div className="text-xs text-slate-400">Chưa có bản ghi Webhook nào được nhận từ Shopee.</div>
+              <p className="text-[11px] text-slate-500">
+                Khi Shopee gửi thông báo (đơn hàng mới, test ping, cập nhật trạng thái), dữ liệu sẽ xuất hiện ở đây ngay lập tức.
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto rounded-xl border border-slate-800">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-900/90 text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-800">
+                  <tr>
+                    <th className="py-3 px-4 font-semibold">Thời gian</th>
+                    <th className="py-3 px-4 font-semibold">Event Code</th>
+                    <th className="py-3 px-4 font-semibold">Chủ đề sự kiện (Topic)</th>
+                    <th className="py-3 px-4 font-semibold">Shop ID</th>
+                    <th className="py-3 px-4 font-semibold">IP Gửi</th>
+                    <th className="py-3 px-4 font-semibold text-right">Chi tiết</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60 font-mono">
+                  {webhookLogs.map((log) => (
+                    <tr key={log.id} className="hover:bg-slate-900/40 transition-colors">
+                      <td className="py-3 px-4 text-slate-400 font-sans text-xs whitespace-nowrap">
+                        {new Date(log.created_at).toLocaleString("vi-VN")}
+                      </td>
+                      <td className="py-3 px-4">
+                        <span className="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 font-bold text-[11px]">
+                          Code {log.code}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 font-sans font-medium text-slate-200 text-xs">
+                        {log.topic}
+                      </td>
+                      <td className="py-3 px-4 text-slate-300 text-xs">
+                        {log.shop_id || <span className="text-slate-600 italic">N/A</span>}
+                      </td>
+                      <td className="py-3 px-4 text-slate-500 text-[11px] truncate max-w-[120px]">
+                        {log.ip || "Direct"}
+                      </td>
+                      <td className="py-3 px-4 text-right">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedLogPayload(log)}
+                          className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-sans font-semibold border border-slate-700 cursor-pointer"
+                        >
+                          🔍 Xem JSON
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
+
+      {/* SHOPS TAB */}
+      {activeTab === "shops" && (
+        <>
+          {/* AUTH LINK & CODE EXCHANGE BOX */}
+          {authUrl && (
+            <div className="p-5 rounded-2xl bg-slate-900 border border-orange-500/40 space-y-4 animate-fade-in shadow-xl">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-xs sm:text-sm text-orange-400 flex items-center gap-1.5">
+                  <ExternalLink size={16} /> Link ủy quyền gian hàng Shopee (OAuth2 Authorization):
+                </span>
+                <a
+                  href={authUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-3.5 py-1.5 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold flex items-center gap-1.5 transition-colors shadow-lg shadow-orange-500/20"
+                >
+                  <span>Mở trang Shopee để cấp quyền</span>
+                  <ExternalLink size={13} />
+                </a>
+              </div>
+
+              <p className="text-xs text-slate-400">
+                1. Bấm nút màu cam bên trên để mở cửa sổ Shopee đăng nhập tài khoản Shop và nhấn <strong>Xác nhận</strong>.<br />
+                2. Sau khi Shopee cấp quyền thành công, copy mã <strong>Code</strong> & <strong>Shop ID</strong> dán vào form bên dưới:
+              </p>
+
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  readOnly
+                  value={authUrl}
+                  className="w-full px-3.5 py-2 rounded-xl bg-slate-950 text-slate-300 text-xs font-mono border border-slate-800 select-all"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(authUrl);
+                    setCopiedLink(true);
+                    setTimeout(() => setCopiedLink(false), 2000);
+                  }}
+                  className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 flex items-center gap-1 shrink-0 cursor-pointer"
+                >
+                  {copiedLink ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
+                  <span>{copiedLink ? "Đã chép" : "Sao chép"}</span>
+                </button>
+              </div>
+
+              {/* Form đổi Code */}
+              <div className="pt-3 border-t border-slate-800 space-y-2">
+                <label className="block text-xs font-semibold text-slate-200">
+                  Nhập mã ủy quyền từ Shopee để thêm Shop vào hệ thống:
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  <input
+                    type="text"
+                    value={exchangeShopId}
+                    onChange={(e) => setExchangeShopId(e.target.value.trim())}
+                    placeholder="Shop ID (Mã gian hàng) *"
+                    className="px-3.5 py-2 rounded-xl bg-slate-950 text-slate-100 text-xs font-mono border border-slate-800 outline-none focus:border-brand-500"
+                  />
+                  <input
+                    type="text"
+                    value={exchangeShopName}
+                    onChange={(e) => setExchangeShopName(e.target.value)}
+                    placeholder="Tên shop gợi nhớ (Tùy chọn)"
+                    className="px-3.5 py-2 rounded-xl bg-slate-950 text-slate-100 text-xs border border-slate-800 outline-none focus:border-brand-500"
+                  />
+                  <input
+                    type="text"
+                    value={exchangeCode}
+                    onChange={(e) => setExchangeCode(e.target.value.trim())}
+                    placeholder="Mã Code từ Shopee *"
+                    className="px-3.5 py-2 rounded-xl bg-slate-950 text-slate-100 text-xs font-mono border border-slate-800 outline-none focus:border-brand-500"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={handleExchangeAuthCode}
+                  disabled={exchanging || !exchangeCode.trim() || !exchangeShopId.trim()}
+                  className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-lg shadow-emerald-600/20 transition-all flex items-center justify-center gap-1.5 disabled:opacity-50 cursor-pointer mt-2"
+                >
+                  {exchanging ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />}
+                  <span>{exchanging ? "Đang đổi Token..." : "⚡ Đổi Token & Thêm Ngay Shop Vào Danh Sách"}</span>
+                </button>
+              </div>
+            </div>
+          )}
 
       {/* SHOPEE SHOPS LIST */}
       <div className="card-gradient rounded-2xl border border-slate-700/50 p-6 space-y-4">
@@ -608,6 +763,52 @@ export function ShopeeShopsPage({ onNavigateToSettings }: ShopeeShopsPageProps) 
           <li>Bạn có thể kết nối không giới hạn số lượng gian hàng và bấm vào <strong>⭐ Ngôi sao</strong> để chọn Shop chính.</li>
         </ol>
       </div>
+      </>
+      )}
+
+      {/* MODAL XEM CHI TIẾT WEBHOOK JSON */}
+      {selectedLogPayload && (
+        <Modal
+          open={true}
+          onClose={() => setSelectedLogPayload(null)}
+          title={`Chi tiết Webhook: ${selectedLogPayload.topic}`}
+          size="lg"
+        >
+          <div className="space-y-4 text-xs">
+            <div className="flex items-center justify-between gap-4 p-3 rounded-xl bg-slate-900 border border-slate-800">
+              <div className="space-y-0.5">
+                <span className="text-[11px] text-slate-400">Thời gian nhận:</span>
+                <p className="font-bold text-slate-200">{new Date(selectedLogPayload.created_at).toLocaleString("vi-VN")}</p>
+              </div>
+              <div className="space-y-0.5">
+                <span className="text-[11px] text-slate-400">Shop ID:</span>
+                <p className="font-mono font-bold text-brand-400">{selectedLogPayload.shop_id || "N/A"}</p>
+              </div>
+              <div className="space-y-0.5">
+                <span className="text-[11px] text-slate-400">Event Code:</span>
+                <p className="font-mono font-bold text-indigo-400">{selectedLogPayload.code}</p>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="block font-semibold text-slate-300">
+                Dữ liệu nhận (Payload JSON):
+              </label>
+              <pre className="p-4 rounded-xl bg-slate-950 border border-slate-800 text-emerald-400 font-mono text-[11px] overflow-x-auto max-h-96">
+                {JSON.stringify(selectedLogPayload.payload, null, 2)}
+              </pre>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setSelectedLogPayload(null)}
+              className="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold border border-slate-700 cursor-pointer"
+            >
+              Đóng
+            </button>
+          </div>
+        </Modal>
+      )}
 
       {/* MODAL THÊM / SỬA SHOP */}
       {shopModalOpen && (
