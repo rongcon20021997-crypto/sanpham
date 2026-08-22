@@ -54,8 +54,8 @@ export default async function handler(req: any, res: any) {
     return res.status(200).end();
   }
 
-  const { action } = req.query || {};
   const body = req.body || {};
+  const action = String(req.query?.action || body.action || "").trim();
 
   try {
     const config = await getAppConfigFromDB();
