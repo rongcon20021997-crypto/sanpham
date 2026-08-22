@@ -20,6 +20,7 @@ import {
   HardDrive,
   Sparkles,
   Wand2,
+  Store,
 } from "lucide-react";
 
 export type PageKey =
@@ -31,6 +32,7 @@ export type PageKey =
   | "products"
   | "ai-prompts"
   | "product-optimize"
+  | "shopee-shops"
   | "users"
   | "settings";
 
@@ -49,6 +51,7 @@ const navItems: { key: PageKey; label: string; icon: typeof LayoutDashboard; adm
   { key: "products", label: "Sản phẩm", icon: Boxes },
   { key: "ai-prompts", label: "Mẫu Prompt AI", icon: Wand2 },
   { key: "product-optimize", label: "Tối ưu sản phẩm (AI)", icon: Sparkles },
+  { key: "shopee-shops", label: "Gian hàng Shopee", icon: Store },
   { key: "users", label: "Nhân viên", icon: Users, adminOnly: true },
   { key: "settings", label: "Cài đặt", icon: Settings },
 ];

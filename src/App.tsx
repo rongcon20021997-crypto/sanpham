@@ -10,6 +10,7 @@ import { LogosPage } from "@/pages/LogosPage";
 import { ProductsPage } from "@/pages/ProductsPage";
 import { AIPromptsPage } from "@/pages/AIPromptsPage";
 import { ProductOptimizePage } from "@/pages/ProductOptimizePage";
+import { ShopeeShopsPage } from "@/pages/ShopeeShopsPage";
 import { UsersPage } from "@/pages/UsersPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { Loader2 } from "lucide-react";
@@ -44,6 +45,9 @@ function AppContent() {
       {effectivePage === "ai-prompts" && <AIPromptsPage />}
       {effectivePage === "product-optimize" && (
         <ProductOptimizePage onNavigateToSettings={() => setPage("settings")} />
+      )}
+      {effectivePage === "shopee-shops" && (
+        <ShopeeShopsPage onNavigateToSettings={() => setPage("settings")} />
       )}
       {effectivePage === "users" && <UsersPage />}
       {effectivePage === "settings" && <SettingsPage />}
