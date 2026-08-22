@@ -115,7 +115,7 @@ export default async function handler(req: any, res: any) {
       try {
         const infoPath = "/api/v2/shop/get_shop_info";
         const infoSign = generateShopeeSignature(partnerId, partnerKey, infoPath, timestamp, accessToken, shopId);
-        const infoUrl = `${host}${infoPath}?partner_id=${partnerId}&timestamp=${timestamp}&access_token=${accessToken}&shop_id=${shopId}&sign=${infoSign}`;
+        const infoUrl = `${host}${infoPath}?partner_id=${Number(partnerId)}&timestamp=${timestamp}&access_token=${accessToken}&shop_id=${Number(shopId)}&sign=${infoSign}`;
         const infoRes = await fetch(infoUrl);
         const infoData = await infoRes.json();
         if (infoData.shop_name) shopName = infoData.shop_name;
@@ -219,7 +219,7 @@ export default async function handler(req: any, res: any) {
       const apiPath = "/api/v2/shop/get_shop_info";
       const timestamp = Math.floor(Date.now() / 1000);
       const sign = generateShopeeSignature(partnerId, partnerKey, apiPath, timestamp, accessToken, shopId);
-      const url = `${host}${apiPath}?partner_id=${partnerId}&timestamp=${timestamp}&access_token=${accessToken}&shop_id=${shopId}&sign=${sign}`;
+      const url = `${host}${apiPath}?partner_id=${Number(partnerId)}&timestamp=${timestamp}&access_token=${accessToken}&shop_id=${Number(shopId)}&sign=${sign}`;
 
       const infoRes = await fetch(url);
       const infoData = await infoRes.json();
