@@ -8,6 +8,7 @@ import { BlanksPage } from "@/pages/BlanksPage";
 import { PrintDesignsPage } from "@/pages/PrintDesignsPage";
 import { LogosPage } from "@/pages/LogosPage";
 import { ProductsPage } from "@/pages/ProductsPage";
+import { AIPromptsPage } from "@/pages/AIPromptsPage";
 import { ProductOptimizePage } from "@/pages/ProductOptimizePage";
 import { UsersPage } from "@/pages/UsersPage";
 import { SettingsPage } from "@/pages/SettingsPage";
@@ -40,6 +41,7 @@ function AppContent() {
       {effectivePage === "print-designs" && <PrintDesignsPage />}
       {effectivePage === "logos" && <LogosPage />}
       {effectivePage === "products" && <ProductsPage />}
+      {effectivePage === "ai-prompts" && <AIPromptsPage />}
       {effectivePage === "product-optimize" && (
         <ProductOptimizePage onNavigateToSettings={() => setPage("settings")} />
       )}

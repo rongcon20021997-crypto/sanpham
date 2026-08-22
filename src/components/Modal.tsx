@@ -7,9 +7,10 @@ interface ModalProps {
   title: string;
   children: ReactNode;
   size?: "sm" | "md" | "lg" | "xl" | "2xl";
+  zIndex?: string;
 }
 
-export function Modal({ open, onClose, title, children, size = "md" }: ModalProps) {
+export function Modal({ open, onClose, title, children, size = "md", zIndex = "z-50" }: ModalProps) {
   const [show, setShow] = useState(false);
 
   useEffect(() => {
@@ -36,7 +37,7 @@ export function Modal({ open, onClose, title, children, size = "md" }: ModalProp
   }[size || "md"];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-2 sm:p-6">
+    <div className={`fixed inset-0 ${zIndex} flex items-end sm:items-center justify-center p-2 sm:p-6`}>
       {/* Backdrop */}
       <div
         className={`absolute inset-0 bg-slate-950/80 backdrop-blur-md transition-opacity duration-200 ${
@@ -47,7 +48,7 @@ export function Modal({ open, onClose, title, children, size = "md" }: ModalProp
       
       {/* Modal Dialog */}
       <div
-        className={`relative w-full ${sizeClass} max-w-full my-0 sm:my-auto bg-slate-900 rounded-t-2xl sm:rounded-2xl shadow-2xl border border-slate-700/60 flex flex-col max-h-[92vh] sm:max-h-[90vh] overflow-hidden transition-all duration-200 ${
+        className={`relative w-full ${sizeClass} my-0 sm:my-auto bg-slate-900 rounded-t-2xl sm:rounded-2xl shadow-2xl border border-slate-700/60 flex flex-col max-h-[92vh] sm:max-h-[90vh] overflow-hidden transition-all duration-200 ${
           show ? "translate-y-0 scale-100 opacity-100" : "translate-y-4 sm:translate-y-0 scale-95 opacity-0"
         }`}
       >
@@ -56,7 +57,7 @@ export function Modal({ open, onClose, title, children, size = "md" }: ModalProp
           <h3 className="text-base sm:text-lg font-semibold text-slate-100 truncate pr-2">{title}</h3>
           <button
             onClick={onClose}
-            className="p-2 rounded-xl text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition-colors shrink-0"
+            className="p-2 rounded-xl text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition-colors shrink-0 cursor-pointer"
             title="Đóng"
           >
             <X size={20} />

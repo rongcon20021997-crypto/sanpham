@@ -17,6 +17,8 @@ export interface Color {
   code: string;
   name: string;
   hex: string | null;
+  prompt_front?: string | null;
+  prompt_back?: string | null;
 }
 
 export interface Size {
@@ -121,3 +123,15 @@ export interface LogoItem {
   image_url: string;
   created_at?: string;
 }
+
+export interface AIPrompt {
+  id: string;
+  title: string;
+  prompt: string;
+  side: "all" | "front" | "back";
+  category?: string | null;
+  is_active: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+

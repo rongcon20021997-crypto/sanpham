@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
-import type { Product, Blank, PrintDesign, BlankType, LogoItem } from "@/lib/types";
+import type { Product, Blank, PrintDesign, BlankType, LogoItem, Color } from "@/lib/types";
 import { PageHeader, SearchInput, EmptyState } from "@/components/PageParts";
 import { Modal } from "@/components/Modal";
 import { ImageZoomModal, type ZoomImageItem } from "@/components/ImageZoomModal";
@@ -29,6 +29,9 @@ import {
   RefreshCw,
   CheckCircle2,
   Check,
+  Copy,
+  Bot,
+  ZoomIn,
 } from "lucide-react";
 import { formatCurrency, uploadFile, formatColorName } from "@/lib/helpers";
 import { loadImageWithR2Priority } from "@/lib/r2Storage";
@@ -48,7 +51,6 @@ export interface MasterProductGroup {
 }
 
 import { MockupEditorModal, PrintDesignItem } from "@/components/MockupEditorModal";
-import { QuickCreateModal } from "@/components/QuickCreateModal";
 import type { PrintPositionData } from "@/lib/types";
 
 export interface ColorSubGroupItem {
@@ -159,7 +161,8 @@ async function generateAndUploadMockupForBlank({
 }
 
 // Helper nhóm các biến thể theo phôi màu
-export function getColorSubGroups(variants: Product[]) {
+export function getColorSubGroups(variants?: Product[] | null) {
+  if (!variants || !Array.isArray(variants)) return [];
   const colorSubGroupsMap: Record<
     string,
     {
@@ -173,11 +176,12 @@ export function getColorSubGroups(variants: Product[]) {
   > = {};
 
   variants.forEach((v) => {
-    const colorKey = v.blanks?.color || "Khác";
+    if (!v) return;
+    const colorKey = v.blanks?.color || v.color || "Khác";
     if (!colorSubGroupsMap[colorKey]) {
       colorSubGroupsMap[colorKey] = {
         color: colorKey,
-        blank_image: v.blanks?.image_url || null,
+        blank_image: v.blanks?.image_url || v.raw_blank_image_url || null,
         blank_image_back: v.blanks?.image_back_url || null,
         preview_url: v.preview_url || null,
         blank_image_type: v.blank_image_type || null,
@@ -185,8 +189,8 @@ export function getColorSubGroups(variants: Product[]) {
       };
     }
     colorSubGroupsMap[colorKey].variants.push(v);
-    if (!colorSubGroupsMap[colorKey].blank_image && v.blanks?.image_url) {
-      colorSubGroupsMap[colorKey].blank_image = v.blanks.image_url;
+    if (!colorSubGroupsMap[colorKey].blank_image && (v.blanks?.image_url || v.raw_blank_image_url)) {
+      colorSubGroupsMap[colorKey].blank_image = v.blanks?.image_url || v.raw_blank_image_url || null;
     }
     if (!colorSubGroupsMap[colorKey].blank_image_back && v.blanks?.image_back_url) {
       colorSubGroupsMap[colorKey].blank_image_back = v.blanks.image_back_url;
@@ -208,6 +212,7 @@ export function ProductsPage() {
   const [designs, setDesigns] = useState<PrintDesign[]>([]);
   const [types, setTypes] = useState<BlankType[]>([]);
   const [logos, setLogos] = useState<LogoItem[]>([]);
+  const [colorsList, setColorsList] = useState<Color[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [filterType, setFilterType] = useState("");
@@ -215,10 +220,11 @@ export function ProductsPage() {
   const [filterSize, setFilterSize] = useState("");
   const [filterTheme, setFilterTheme] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
+  const [filterImage, setFilterImage] = useState("");
+  const [filterVideo, setFilterVideo] = useState("");
   const [showFilters, setShowFilters] = useState(false);
   const [viewMode, setViewMode] = useState<"grouped" | "flat">("grouped");
 
-  const [quickCreateModal, setQuickCreateModal] = useState(false);
   const [createModal, setCreateModal] = useState(false);
   const [previewItem, setPreviewItem] = useState<Product | null>(null);
   const [previewGroup, setPreviewGroup] = useState<MasterProductGroup | null>(null);
@@ -241,7 +247,7 @@ export function ProductsPage() {
   async function load() {
     setLoading(true);
     try {
-      const [pr, bl, pd, bt, lg] = await Promise.all([
+      const [pr, bl, pd, bt, lg, cl] = await Promise.all([
         supabase
           .from("products")
           .select("*, blanks(*, blank_types(*)), print_designs(*)")
@@ -250,11 +256,14 @@ export function ProductsPage() {
         supabase.from("print_designs").select("*").order("code"),
         supabase.from("blank_types").select("*").order("name"),
         supabase.from("logos").select("*").order("code"),
+        supabase.from("colors").select("*").order("name"),
       ]);
 
       if (pr.error) console.error("Error loading products:", pr.error);
       if (bl.error) console.error("Error loading blanks:", bl.error);
       if (pd.error) console.error("Error loading print_designs:", pd.error);
+
+      setColorsList((cl.data as Color[]) || []);
 
       const rawProducts = (pr.data as Product[]) || [];
       const rawDesigns = (pd.data as PrintDesign[]) || [];
@@ -326,9 +335,29 @@ export function ProductsPage() {
       const matchSize = !filterSize || blank?.size === filterSize;
       const matchTheme = !filterTheme || design?.theme === filterTheme;
       const matchStatus = !filterStatus || p.status === filterStatus;
-      return matchSearch && matchType && matchColor && matchSize && matchTheme && matchStatus;
+      const matchImage =
+        !filterImage ||
+        filterImage === "all" ||
+        (filterImage === "has_images" && Array.isArray(p.images) && p.images.length > 0) ||
+        (filterImage === "no_images" && (!p.images || p.images.length === 0));
+      const matchVideo =
+        !filterVideo ||
+        filterVideo === "all" ||
+        (filterVideo === "has_video" && Boolean(p.video_url && p.video_url.trim())) ||
+        (filterVideo === "no_video" && (!p.video_url || !p.video_url.trim()));
+
+      return (
+        matchSearch &&
+        matchType &&
+        matchColor &&
+        matchSize &&
+        matchTheme &&
+        matchStatus &&
+        matchImage &&
+        matchVideo
+      );
     });
-  }, [items, search, filterType, filterColor, filterSize, filterTheme, filterStatus]);
+  }, [items, search, filterType, filterColor, filterSize, filterTheme, filterStatus, filterImage, filterVideo]);
 
   // Group products into Master Product Groups
   const masterGroups = useMemo(() => {
@@ -510,7 +539,26 @@ export function ProductsPage() {
     return { total: colorSubGroups.length, success: successCount };
   }
 
-  const hasFilters = filterType || filterColor || filterSize || filterTheme || filterStatus;
+  const hasFilters = Boolean(
+    filterType ||
+    filterColor ||
+    filterSize ||
+    filterTheme ||
+    filterStatus ||
+    (filterImage && filterImage !== "all") ||
+    (filterVideo && filterVideo !== "all")
+  );
+
+  function resetFilters() {
+    setSearch("");
+    setFilterType("");
+    setFilterColor("");
+    setFilterSize("");
+    setFilterTheme("");
+    setFilterStatus("");
+    setFilterImage("");
+    setFilterVideo("");
+  }
 
   return (
     <div className="animate-fade-in space-y-4 sm:space-y-5">
@@ -529,7 +577,7 @@ export function ProductsPage() {
                   : "border-slate-700 text-slate-300 hover:bg-slate-800"
               }`}
             >
-              <Filter size={15} /> Lọc
+              <Filter size={15} /> Lọc {hasFilters && "•"}
             </button>
             
             <div className="flex bg-slate-800/80 p-1 rounded-xl border border-slate-700/60 shrink-0">
@@ -558,37 +606,92 @@ export function ProductsPage() {
             </div>
 
             <button
-              onClick={() => setQuickCreateModal(true)}
-              className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-brand-500 to-indigo-600 hover:from-brand-600 hover:to-indigo-700 text-white text-xs font-bold flex items-center justify-center gap-1.5 shadow-md shadow-brand-500/20 transition-all shrink-0 cursor-pointer animate-pulse-subtle"
-              title="Khởi tạo nhanh sản phẩm siêu tốc với phôi và hình in"
-            >
-              <Sparkles size={15} /> ⚡ Khởi Tạo Nhanh
-            </button>
-
-            <button
               onClick={() => setCreateModal(true)}
-              className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-medium flex items-center justify-center gap-1.5 transition-all shrink-0 cursor-pointer"
-              title="Tạo sản phẩm với cấu hình chi tiết thủ công"
+              className="px-3.5 py-2 rounded-xl bg-brand-500 hover:bg-brand-600 text-white text-xs font-bold flex items-center justify-center gap-1.5 shadow-md shadow-brand-500/20 transition-all shrink-0 cursor-pointer"
+              title="Tạo sản phẩm mới"
             >
-              <Plus size={15} /> Cấu hình thủ công
+              <Plus size={15} /> Tạo sản phẩm
             </button>
           </div>
         }
       />
 
       {showFilters && (
-        <div className="card-gradient rounded-2xl border border-slate-700/50 p-3 sm:p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5 sm:gap-3">
-          <Select label="Loại phôi" value={filterType} onChange={setFilterType}
-            options={types.map((t) => ({ value: t.id, label: t.name }))} placeholder="Tất cả" />
-          <Select label="Màu" value={filterColor} onChange={setFilterColor}
-            options={colors.map((c) => ({ value: c, label: c }))} placeholder="Tất cả" />
-          <Select label="Size" value={filterSize} onChange={setFilterSize}
-            options={sizes.map((s) => ({ value: s, label: s }))} placeholder="Tất cả" />
-          <Select label="Chủ đề" value={filterTheme} onChange={setFilterTheme}
-            options={themes.map((t) => ({ value: t, label: t }))} placeholder="Tất cả" />
-          <Select label="Trạng thái" value={filterStatus} onChange={setFilterStatus}
-            options={[{ value: "active", label: "Đang bán" }, { value: "inactive", label: "Tạm dừng" }]}
-            placeholder="Tất cả" />
+        <div className="card-gradient rounded-2xl border border-slate-700/50 p-3 sm:p-4 space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-2.5 sm:gap-3">
+            <Select
+              label="Loại phôi"
+              value={filterType}
+              onChange={setFilterType}
+              options={types.map((t) => ({ value: t.id, label: t.name }))}
+              placeholder="Tất cả"
+            />
+            <Select
+              label="Màu"
+              value={filterColor}
+              onChange={setFilterColor}
+              options={colors.map((c) => ({ value: c, label: c }))}
+              placeholder="Tất cả"
+            />
+            <Select
+              label="Size"
+              value={filterSize}
+              onChange={setFilterSize}
+              options={sizes.map((s) => ({ value: s, label: s }))}
+              placeholder="Tất cả"
+            />
+            <Select
+              label="Chủ đề"
+              value={filterTheme}
+              onChange={setFilterTheme}
+              options={themes.map((t) => ({ value: t, label: t }))}
+              placeholder="Tất cả"
+            />
+            <Select
+              label="Hình ảnh"
+              value={filterImage}
+              onChange={setFilterImage}
+              options={[
+                { value: "all", label: "Tất cả" },
+                { value: "has_images", label: "🖼️ Đã up hình" },
+                { value: "no_images", label: "🚫 Chưa up hình" },
+              ]}
+              placeholder="Tất cả"
+            />
+            <Select
+              label="Video"
+              value={filterVideo}
+              onChange={setFilterVideo}
+              options={[
+                { value: "all", label: "Tất cả" },
+                { value: "has_video", label: "🎬 Đã up video" },
+                { value: "no_video", label: "🚫 Chưa up video" },
+              ]}
+              placeholder="Tất cả"
+            />
+            <Select
+              label="Trạng thái"
+              value={filterStatus}
+              onChange={setFilterStatus}
+              options={[
+                { value: "active", label: "Đang bán" },
+                { value: "inactive", label: "Tạm dừng" },
+              ]}
+              placeholder="Tất cả"
+            />
+          </div>
+
+          {hasFilters && (
+            <div className="flex items-center justify-end pt-1 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={resetFilters}
+                className="text-xs text-rose-400 hover:text-rose-300 hover:underline flex items-center gap-1 font-medium cursor-pointer"
+              >
+                <X size={13} /> Xóa tất cả bộ lọc
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -929,18 +1032,6 @@ export function ProductsPage() {
         </div>
       )}
 
-      {/* Modal Khởi Tạo Nhanh Siêu Tốc & Check Trùng Phôi / Hình In */}
-      <QuickCreateModal
-        open={quickCreateModal}
-        onClose={() => setQuickCreateModal(false)}
-        existingProducts={items}
-        blanks={blanks}
-        designs={designs}
-        types={types}
-        logos={logos}
-        onCreated={load}
-      />
-
       {/* Master Product Creation Modal */}
       <CreateMasterProductModal
         open={createModal}
@@ -965,11 +1056,6 @@ export function ProductsPage() {
       <Modal open={!!previewItem} onClose={() => setPreviewItem(null)} title="Xem trước biến thể" size="lg">
         {previewItem && <ProductPreview product={previewItem} />}
       </Modal>
-
-      {/* Master Group Media Preview & Upload Modal */}
-      {previewGroup && (
-        <MasterGroupMediaModal group={previewGroup} onClose={() => setPreviewGroup(null)} onSaved={load} />
-      )}
 
       {/* Modal Phóng To Xem Chi Tiết Ảnh HD (Interactive Image Zoom) */}
       <ImageZoomModal
@@ -999,6 +1085,16 @@ export function ProductsPage() {
           onZoomImage={(data) => setZoomImage(data)}
           onReRenderColor={handleReRenderColorMockup}
           onReRenderAllColors={handleReRenderAllColors}
+        />
+      )}
+
+      {/* Master Group Media Preview & Upload Modal */}
+      {previewGroup && (
+        <MasterGroupMediaModal
+          group={previewGroup}
+          colorsList={colorsList}
+          onClose={() => setPreviewGroup(null)}
+          onSaved={load}
         />
       )}
 
@@ -2090,27 +2186,168 @@ function EditMasterProductGroupModal({
   );
 }
 
+/* Helper chuẩn hóa URL hình ảnh an toàn tuyệt đối */
+function toMediaUrl(media: any): string | null {
+  if (!media) return null;
+  if (typeof media === "string") return media.trim();
+  if (typeof media === "object") {
+    if (media.url && typeof media.url === "string") return media.url.trim();
+    if (media.publicUrl && typeof media.publicUrl === "string") return media.publicUrl.trim();
+    if (media.src && typeof media.src === "string") return media.src.trim();
+  }
+  return String(media);
+}
+
+function isVideoUrl(media: any): boolean {
+  const url = toMediaUrl(media);
+  if (!url) return false;
+  const lower = url.toLowerCase();
+  return (
+    lower.endsWith(".mp4") ||
+    lower.endsWith(".webm") ||
+    lower.endsWith(".mov") ||
+    lower.includes("video") ||
+    lower.includes("youtube.com") ||
+    lower.includes("youtu.be")
+  );
+}
+
 /* Modal Quản Lý & Tải Thêm Media / Video Sản Phẩm Chung */
 function MasterGroupMediaModal({
   group,
+  colorsList = [],
   onClose,
   onSaved,
 }: {
   group: MasterProductGroup;
+  colorsList?: Color[];
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const [images, setImages] = useState<string[]>(group.images || []);
-  const [videoUrl, setVideoUrl] = useState<string>(group.video_url || "");
+  const rawImages = Array.isArray(group?.images) ? group.images : [];
+  const normalizedImages = rawImages
+    .map((img) => toMediaUrl(img))
+    .filter((u): u is string => Boolean(u));
+
+  const [images, setImages] = useState<string[]>(normalizedImages);
+  const [videoUrl, setVideoUrl] = useState<string>(toMediaUrl(group?.video_url) || "");
   const [imageUrlInput, setImageUrlInput] = useState("");
-  const [selectedMedia, setSelectedMedia] = useState<string | null>(
-    group.images?.[0] || group.video_url || null
-  );
+
+  const colorSubGroups = useMemo(() => getColorSubGroups(group?.variants || []), [group?.variants]);
+
+  const defaultFirstMedia =
+    normalizedImages[0] ||
+    toMediaUrl(group?.video_url) ||
+    toMediaUrl(colorSubGroups[0]?.preview_url) ||
+    toMediaUrl(colorSubGroups[0]?.variants?.find((v) => v.preview_url)?.preview_url) ||
+    toMediaUrl(colorSubGroups[0]?.blank_image) ||
+    toMediaUrl(colorSubGroups[0]?.blank_image_back) ||
+    null;
+
+  const [selectedMedia, setSelectedMedia] = useState<string | null>(defaultFirstMedia);
+  const [zoomModalOpen, setZoomModalOpen] = useState(false);
 
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  // Upload thêm nhiều hình ảnh
+  // Xác định sản phẩm là Mặt sau hay Mặt trước
+  const isBack = Boolean(
+    group?.print_design?.is_back ||
+    group?.print_designs_list?.some((d) => d?.is_back) ||
+    group?.variants?.[0]?.print_designs?.is_back ||
+    group?.variants?.[0]?.blank_image_type === "back"
+  );
+
+  const [copyingImageIdx, setCopyingImageIdx] = useState<number | null>(null);
+  const [copiedImageIdx, setCopiedImageIdx] = useState<number | null>(null);
+  const [copiedPromptIdx, setCopiedPromptIdx] = useState<number | null>(null);
+
+  // Copy hình ảnh phôi vào clipboard để dán vào ChatGPT (Ctrl+V)
+  async function handleCopyImage(rawImageUrl: string | null | undefined, idx: number) {
+    const imageUrl = toMediaUrl(rawImageUrl);
+    if (!imageUrl) {
+      alert("Phôi này chưa có hình ảnh!");
+      return;
+    }
+    setCopyingImageIdx(idx);
+    try {
+      const response = await fetch(imageUrl, { mode: "cors" });
+      const imgBlob = await response.blob();
+
+      // Convert to pure PNG Blob for ChatGPT clipboard compatibility
+      const pngBlob = await new Promise<Blob>((resolve) => {
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        img.onload = () => {
+          try {
+            const canvas = document.createElement("canvas");
+            canvas.width = img.naturalWidth || img.width;
+            canvas.height = img.naturalHeight || img.height;
+            const ctx = canvas.getContext("2d");
+            if (!ctx) {
+              resolve(imgBlob);
+              return;
+            }
+            ctx.drawImage(img, 0, 0);
+            canvas.toBlob((b) => {
+              if (b) resolve(b);
+              else resolve(imgBlob);
+            }, "image/png");
+          } catch {
+            resolve(imgBlob);
+          }
+        };
+        img.onerror = () => {
+          resolve(imgBlob);
+        };
+        img.src = URL.createObjectURL(imgBlob);
+      });
+
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          "image/png": pngBlob,
+        }),
+      ]);
+
+      setCopiedImageIdx(idx);
+      setTimeout(() => setCopiedImageIdx(null), 3000);
+    } catch (err) {
+      console.warn("Clipboard API write failed, trying fallback copy url:", err);
+      try {
+        await navigator.clipboard.writeText(imageUrl);
+        setCopiedImageIdx(idx);
+        setTimeout(() => setCopiedImageIdx(null), 3000);
+      } catch (e) {
+        alert("Không thể copy ảnh tự động vào bộ nhớ tạm. Hãy nhấp chuột phải vào ảnh -> Sao chép hình ảnh.");
+      }
+    } finally {
+      setCopyingImageIdx(null);
+    }
+  }
+
+  // Copy câu Prompt đã thay thế tên màu thực tế
+  async function handleCopyPrompt(promptTemplate: string | null | undefined, colorName: string, idx: number) {
+    if (!promptTemplate || !promptTemplate.trim()) {
+      alert("Màu này chưa được cài đặt câu Prompt!");
+      return;
+    }
+
+    const processedPrompt = promptTemplate
+      .replace(/{color}/gi, colorName || "")
+      .replace(/{blank_type}/gi, group?.blank_type?.name || "Áo thun")
+      .replace(/{design_name}/gi, group?.print_design?.name || group?.master_name || "Họa tiết")
+      .replace(/{side}/gi, isBack ? "mặt sau" : "mặt trước");
+
+    try {
+      await navigator.clipboard.writeText(processedPrompt);
+      setCopiedPromptIdx(idx);
+      setTimeout(() => setCopiedPromptIdx(null), 3000);
+    } catch (err) {
+      alert("Không thể copy text tự động!");
+    }
+  }
+
+  // Tải lên nhiều ảnh album
   async function handleImageUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -2123,15 +2360,18 @@ function MasterGroupMediaModal({
         if (url) uploadedUrls.push(url);
       }
       setImages((prev) => [...prev, ...uploadedUrls]);
-      if (uploadedUrls.length > 0) setSelectedMedia(uploadedUrls[0]);
+      if (uploadedUrls.length > 0 && !selectedMedia) {
+        setSelectedMedia(uploadedUrls[0]);
+      }
     } catch (err) {
-      alert("Lỗi tải lên hình ảnh: " + (err as Error).message);
+      alert("Lỗi tải ảnh: " + (err as Error).message);
     } finally {
       setUploading(false);
+      e.target.value = "";
     }
   }
 
-  // Upload 1 Video
+  // Tải lên Video
   async function handleVideoUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -2144,20 +2384,23 @@ function MasterGroupMediaModal({
         setSelectedMedia(url);
       }
     } catch (err) {
-      alert("Lỗi tải lên video: " + (err as Error).message);
+      alert("Lỗi tải video: " + (err as Error).message);
     } finally {
       setUploading(false);
+      e.target.value = "";
     }
   }
 
+  // Thêm ảnh từ URL trực tiếp
   function addImageUrl() {
-    if (!imageUrlInput.trim()) return;
     const url = imageUrlInput.trim();
+    if (!url) return;
     setImages((prev) => [...prev, url]);
-    setSelectedMedia(url);
+    if (!selectedMedia) setSelectedMedia(url);
     setImageUrlInput("");
   }
 
+  // Xóa ảnh khỏi album
   function removeImage(idx: number) {
     setImages((prev) => prev.filter((_, i) => i !== idx));
   }
@@ -2166,7 +2409,7 @@ function MasterGroupMediaModal({
   async function handleSaveMedia() {
     setSaving(true);
     try {
-      const variantIds = group.variants.map((v) => v.id);
+      const variantIds = (group?.variants || []).map((v) => v.id);
       const { error } = await supabase
         .from("products")
         .update({
@@ -2186,147 +2429,327 @@ function MasterGroupMediaModal({
     }
   }
 
+  const currentMediaUrl = toMediaUrl(selectedMedia);
+  const isCurrentVideo = isVideoUrl(currentMediaUrl);
+
   return (
-    <Modal open={true} onClose={onClose} title={`Album Media & Video: ${group.master_name}`} size="md">
-      <div className="space-y-3.5">
-        {/* Màn hình phát / Xem trước Media đang chọn */}
-        <div className="aspect-video w-full max-h-[220px] sm:max-h-[260px] rounded-xl bg-slate-900 border border-slate-800 overflow-hidden flex items-center justify-center relative shadow-inner mx-auto">
-          {selectedMedia ? (
-            selectedMedia.endsWith(".mp4") || selectedMedia.includes("video") ? (
-              <video src={selectedMedia} controls autoPlay className="w-full h-full object-contain" />
-            ) : (
-              <img src={selectedMedia} alt="" className="w-full h-full object-contain" />
-            )
-          ) : (
-            <Boxes size={40} className="text-slate-700" />
-          )}
-        </div>
-
-        {/* Danh sách ảnh & video hiện tại */}
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between">
-            <label className="block text-[11px] font-semibold text-slate-300 uppercase">
-              🖼️ Danh sách Ảnh chung ({images.length} ảnh)
-            </label>
-            {images.length > 0 && (
-              <button
-                type="button"
-                onClick={() => {
-                  setImages([]);
-                  setSelectedMedia(videoUrl || null);
-                }}
-                className="text-[10px] text-rose-400 hover:underline font-medium"
-              >
-                Xóa tất cả ảnh
-              </button>
-            )}
-          </div>
-
-          <div className="flex flex-wrap gap-2 items-center">
-            {images.map((img, idx) => (
-              <div
-                key={idx}
-                onClick={() => setSelectedMedia(img)}
-                className={`relative w-12 h-12 sm:w-14 sm:h-14 rounded-lg bg-slate-800 border overflow-hidden cursor-pointer group shrink-0 ${
-                  selectedMedia === img ? "border-brand-500 ring-2 ring-brand-500/40" : "border-slate-700 opacity-80 hover:opacity-100"
-                }`}
-              >
-                <img src={img} alt="" className="w-full h-full object-contain" />
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    removeImage(idx);
-                  }}
-                  className="absolute top-1 right-1 p-1 rounded-full bg-rose-500/90 text-white opacity-0 group-hover:opacity-100 transition-opacity"
-                  title="Xóa ảnh này"
-                >
-                  <X size={10} />
-                </button>
+    <>
+      <Modal open={true} onClose={onClose} title={`🎬 Album Media & Phôi Màu AI: ${group?.master_name || "Sản phẩm"}`} size="2xl" zIndex="z-[60]">
+        <div className="space-y-4">
+          {/* Top 2-Column Grid: Left is Massive Viewer, Right is Colors & Album */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+            
+            {/* CỘT TRÁI (7 CỘT): MÀN HÌNH XEM MEDIA SIÊU TO KHỔNG LỒ */}
+            <div className="lg:col-span-7 space-y-2">
+              <div className="flex items-center justify-between px-1">
+                <label className="text-xs font-bold text-slate-200 uppercase tracking-wide flex items-center gap-1.5">
+                  <Eye size={15} className="text-brand-400" /> Màn hình xem lớn (HD Preview)
+                </label>
+                {currentMediaUrl && !isCurrentVideo && (
+                  <button
+                    type="button"
+                    onClick={() => setZoomModalOpen(true)}
+                    className="text-xs text-brand-400 hover:text-brand-300 font-semibold flex items-center gap-1.5 bg-brand-500/10 hover:bg-brand-500/20 px-3 py-1.5 rounded-xl border border-brand-500/30 transition-all cursor-pointer shadow-sm"
+                    title="Phóng to toàn màn hình chi tiết"
+                  >
+                    <ZoomIn size={14} /> Phóng to HD (Full Zoom)
+                  </button>
+                )}
               </div>
-            ))}
 
-            {/* Nút Tải ảnh mới */}
-            <label className="w-12 h-12 sm:w-14 sm:h-14 rounded-lg border-2 border-dashed border-slate-700 hover:border-brand-500 bg-slate-800/40 flex flex-col items-center justify-center text-slate-400 hover:text-brand-400 cursor-pointer transition-colors shrink-0">
-              <Upload size={16} />
-              <span className="text-[10px] mt-0.5 font-medium">Tải ảnh</span>
-              <input type="file" accept="image/*" multiple onChange={handleImageUpload} className="hidden" />
-            </label>
+              {/* KHUNG ẢNH TO / VIDEO PLAYER */}
+              <div className="w-full h-[380px] sm:h-[460px] lg:h-[530px] rounded-2xl bg-gradient-to-b from-slate-950 to-slate-900 border border-slate-700/80 overflow-hidden relative flex items-center justify-center shadow-2xl group">
+                {currentMediaUrl ? (
+                  isCurrentVideo ? (
+                    <video src={currentMediaUrl} controls autoPlay className="w-full h-full object-contain" />
+                  ) : (
+                    <>
+                      <img
+                        src={currentMediaUrl}
+                        alt="Preview"
+                        onClick={() => setZoomModalOpen(true)}
+                        className="w-full h-full object-contain cursor-zoom-in transition-transform duration-300 group-hover:scale-[1.01]"
+                      />
+                      <div
+                        onClick={() => setZoomModalOpen(true)}
+                        className="absolute bottom-3 right-3 bg-slate-950/80 hover:bg-brand-600 text-slate-200 hover:text-white px-3 py-1.5 rounded-xl border border-slate-700/80 text-xs font-semibold flex items-center gap-1.5 backdrop-blur-md cursor-pointer transition-all shadow-lg opacity-80 group-hover:opacity-100"
+                      >
+                        <ZoomIn size={14} /> Bấm để phóng to
+                      </div>
+                    </>
+                  )
+                ) : (
+                  <div className="flex flex-col items-center gap-2 text-slate-500">
+                    <Boxes size={48} className="text-slate-700 animate-pulse" />
+                    <span className="text-xs">Chưa chọn hình ảnh hoặc video</span>
+                  </div>
+                )}
+              </div>
+            </div>
 
-            {/* Ô nhập URL ảnh trực tiếp */}
-            <div className="flex-1 flex gap-1.5 min-w-[200px] w-full sm:w-auto">
-              <input
-                type="text"
-                value={imageUrlInput}
-                onChange={(e) => setImageUrlInput(e.target.value)}
-                placeholder="Dán link URL ảnh..."
-                className="flex-1 px-3 py-2 rounded-xl border border-slate-700 bg-slate-800 text-xs text-slate-200 outline-none focus:border-brand-500"
-              />
-              <button
-                type="button"
-                onClick={addImageUrl}
-                className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 border border-slate-700 shrink-0"
-              >
-                Thêm
-              </button>
+            {/* CỘT PHẢI (5 CỘT): PHÔI THEO MÀU & ALBUM MEDIA */}
+            <div className="lg:col-span-5 space-y-3.5 max-h-[570px] overflow-y-auto pr-1">
+              {/* SECTION 1: CÁC PHÔI THEO MÀU & COPY PROMPT */}
+              <div className="p-3 sm:p-3.5 rounded-2xl bg-slate-850 border border-slate-700/70 shadow-md space-y-2.5">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-700/50">
+                  <div className="flex items-center gap-1.5">
+                    <Sparkles size={15} className="text-amber-400" />
+                    <h4 className="text-xs font-bold text-slate-100 uppercase tracking-wide">
+                      Phôi Màu & Prompt AI
+                    </h4>
+                  </div>
+                  <div className="text-[11px] px-2 py-0.5 rounded-full font-bold border bg-slate-900 border-slate-700">
+                    {isBack ? <span className="text-purple-400">🔙 Mặt sau</span> : <span className="text-sky-400">👕 Mặt trước</span>}
+                  </div>
+                </div>
+
+                <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
+                  {colorSubGroups.map((cg, idx) => {
+                    const colorName = formatColorName(cg.color);
+                    const colorObj = (colorsList || []).find(
+                      (c) =>
+                        (c?.name && c.name.toLowerCase() === (cg?.color || "").toLowerCase()) ||
+                        (c?.code && c.code.toLowerCase() === (cg?.color || "").toLowerCase()) ||
+                        (c?.name && c.name.toLowerCase() === (colorName || "").toLowerCase())
+                    );
+                    const targetBlankImg = isBack
+                      ? toMediaUrl(cg.blank_image_back) || toMediaUrl(cg.blank_image)
+                      : toMediaUrl(cg.blank_image) || toMediaUrl(cg.blank_image_back);
+                    const targetProductImg =
+                      toMediaUrl(cg.preview_url) ||
+                      toMediaUrl(cg.variants?.find((v) => v.preview_url)?.preview_url) ||
+                      targetBlankImg;
+                    const targetPrompt = isBack ? colorObj?.prompt_back : colorObj?.prompt_front;
+
+                    const isSelected = currentMediaUrl === targetProductImg;
+                    const isCopyingImg = copyingImageIdx === idx;
+                    const isCopiedImg = copiedImageIdx === idx;
+                    const isCopiedPrompt = copiedPromptIdx === idx;
+
+                    return (
+                      <div
+                        key={idx}
+                        onClick={() => targetProductImg && setSelectedMedia(targetProductImg)}
+                        className={`flex items-center gap-2.5 p-2 rounded-xl bg-slate-900/80 border transition-all cursor-pointer ${
+                          isSelected
+                            ? "border-brand-500 ring-2 ring-brand-500/30 bg-brand-950/20"
+                            : "border-slate-700/80 hover:border-slate-600 hover:bg-slate-800/60"
+                        }`}
+                      >
+                        {/* Thumbnail to hơn */}
+                        <div className="w-13 h-13 sm:w-14 sm:h-14 rounded-lg bg-slate-950 border border-slate-700/80 overflow-hidden shrink-0 relative flex items-center justify-center">
+                          {targetProductImg ? (
+                            <img src={targetProductImg} alt="" className="w-full h-full object-contain" />
+                          ) : (
+                            <span className="text-[10px] text-slate-500">No img</span>
+                          )}
+                        </div>
+
+                        {/* Thông tin màu & Nút copy */}
+                        <div className="min-w-0 flex-1 flex flex-col justify-center gap-1.5">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span
+                              className="w-3 h-3 rounded-full border border-slate-500 shrink-0 shadow-sm"
+                              style={{ background: colorObj?.hex || "#ccc" }}
+                            />
+                            <span className="text-xs font-bold text-slate-200 truncate">
+                              {colorName}
+                            </span>
+                            {colorObj?.code && (
+                              <span className="text-[10px] font-mono text-brand-400 bg-brand-500/10 px-1.5 py-0.2 rounded border border-brand-500/20">
+                                {colorObj.code}
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              type="button"
+                              onClick={() => handleCopyImage(targetProductImg, idx)}
+                              disabled={isCopyingImg}
+                              className={`flex-1 flex items-center justify-center gap-1 py-1 px-1.5 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
+                                isCopiedImg
+                                  ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                                  : "bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 hover:border-slate-600"
+                              }`}
+                              title="Copy ảnh sản phẩm (đã ghép) để dán (Ctrl+V) vào ChatGPT"
+                            >
+                              {isCopyingImg ? (
+                                <Loader2 size={11} className="animate-spin text-brand-400" />
+                              ) : isCopiedImg ? (
+                                <Check size={11} className="text-emerald-400" />
+                              ) : (
+                                <Copy size={11} className="text-sky-400" />
+                              )}
+                              <span className="truncate">{isCopiedImg ? "Đã copy" : "Copy ảnh SP"}</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleCopyPrompt(targetPrompt, colorName, idx)}
+                              className={`flex-1 flex items-center justify-center gap-1 py-1 px-1.5 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
+                                isCopiedPrompt
+                                  ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                                  : "bg-brand-500/15 hover:bg-brand-500/25 text-brand-300 border border-brand-500/30 hover:border-brand-500/50"
+                              }`}
+                              title={targetPrompt ? `Copy câu prompt: ${targetPrompt}` : `Chưa có prompt`}
+                            >
+                              {isCopiedPrompt ? (
+                                <Check size={11} className="text-emerald-400" />
+                              ) : (
+                                <Sparkles size={11} className="text-amber-400" />
+                              )}
+                              <span className="truncate">{isCopiedPrompt ? "Đã copy" : "Copy prompt"}</span>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* SECTION 2: ALBUM MEDIA CHUNG */}
+              <div className="p-3 sm:p-3.5 rounded-2xl bg-slate-850 border border-slate-700/70 shadow-md space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-slate-200 uppercase flex items-center gap-1.5">
+                    <ImageIcon size={14} className="text-brand-400" /> Album Ảnh Chung ({images.length})
+                  </label>
+                  {images.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setImages([]);
+                        setSelectedMedia(defaultFirstMedia);
+                      }}
+                      className="text-[10px] text-rose-400 hover:underline font-medium"
+                    >
+                      Xóa tất cả
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap gap-2.5 items-center">
+                  {images.map((img, idx) => (
+                    <div
+                      key={idx}
+                      onClick={() => setSelectedMedia(img)}
+                      className={`relative w-16 h-16 sm:w-18 sm:h-18 rounded-xl bg-slate-900 border overflow-hidden cursor-pointer group shrink-0 transition-all ${
+                        currentMediaUrl === img
+                          ? "border-brand-500 ring-2 ring-brand-500/40 scale-105"
+                          : "border-slate-700/80 opacity-80 hover:opacity-100 hover:border-slate-600"
+                      }`}
+                    >
+                      <img src={img} alt="" className="w-full h-full object-contain" />
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          removeImage(idx);
+                        }}
+                        className="absolute top-1 right-1 p-1 rounded-full bg-rose-500/90 text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                        title="Xóa ảnh này"
+                      >
+                        <X size={11} />
+                      </button>
+                    </div>
+                  ))}
+
+                  {/* Nút Tải ảnh mới */}
+                  <label className="w-16 h-16 sm:w-18 sm:h-18 rounded-xl border-2 border-dashed border-slate-700 hover:border-brand-500 bg-slate-900/60 flex flex-col items-center justify-center text-slate-400 hover:text-brand-400 cursor-pointer transition-all shrink-0">
+                    <Upload size={18} />
+                    <span className="text-[10px] mt-1 font-medium">Tải ảnh</span>
+                    <input type="file" accept="image/*" multiple onChange={handleImageUpload} className="hidden" />
+                  </label>
+                </div>
+
+                {/* Ô URL */}
+                <div className="flex gap-1.5 pt-1">
+                  <input
+                    type="text"
+                    value={imageUrlInput}
+                    onChange={(e) => setImageUrlInput(e.target.value)}
+                    placeholder="Dán link URL ảnh..."
+                    className="flex-1 px-3 py-1.5 rounded-xl border border-slate-700 bg-slate-900 text-xs text-slate-200 outline-none focus:border-brand-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={addImageUrl}
+                    className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 border border-slate-700 shrink-0"
+                  >
+                    Thêm
+                  </button>
+                </div>
+              </div>
+
+              {/* SECTION 3: VIDEO */}
+              <div className="p-3 rounded-2xl bg-slate-850 border border-slate-700/70 shadow-md space-y-2">
+                <label className="text-xs font-bold text-slate-200 uppercase flex items-center gap-1.5">
+                  <Video size={14} className="text-indigo-400" /> Video Giới Thiệu
+                </label>
+                <div className="flex gap-1.5 items-center">
+                  <input
+                    type="text"
+                    value={videoUrl}
+                    onChange={(e) => setVideoUrl(e.target.value)}
+                    placeholder="Link video (.mp4, youtube embed...)"
+                    className="flex-1 px-3 py-1.5 rounded-xl border border-slate-700 bg-slate-900 text-xs text-slate-200 outline-none focus:border-brand-500"
+                  />
+                  <label className="px-3 py-1.5 rounded-xl border border-slate-700 bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-300 cursor-pointer flex items-center justify-center gap-1 shrink-0">
+                    <Video size={13} className="text-indigo-400" /> Tải lên
+                    <input type="file" accept="video/*" onChange={handleVideoUpload} className="hidden" />
+                  </label>
+                  {videoUrl && (
+                    <button
+                      type="button"
+                      onClick={() => setVideoUrl("")}
+                      className="px-3 py-1.5 rounded-xl border border-rose-500/20 bg-rose-500/10 text-rose-400 text-xs font-medium hover:bg-rose-500/20 shrink-0"
+                    >
+                      Xóa
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {uploading && (
+                <p className="text-xs text-brand-400 flex items-center gap-1.5">
+                  <Loader2 size={13} className="animate-spin" /> Đang tải file phương tiện lên...
+                </p>
+              )}
             </div>
           </div>
-        </div>
 
-        {/* Video sản phẩm */}
-        <div className="space-y-2 pt-2 border-t border-slate-800">
-          <label className="block text-xs font-semibold text-slate-300 uppercase">
-            🎬 Video giới thiệu sản phẩm (Tối đa 1 video)
-          </label>
-          <div className="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center">
-            <input
-              type="text"
-              value={videoUrl}
-              onChange={(e) => setVideoUrl(e.target.value)}
-              placeholder="Nhập URL video (.mp4, youtube embed...)"
-              className="flex-1 px-3 py-2 rounded-xl border border-slate-700 bg-slate-800 text-xs text-slate-200 outline-none focus:border-brand-500"
-            />
-            <label className="px-3.5 py-2 rounded-xl border border-slate-700 bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-300 cursor-pointer flex items-center justify-center gap-1.5 shrink-0">
-              <Video size={14} className="text-indigo-400" /> Tải Video
-              <input type="file" accept="video/*" onChange={handleVideoUpload} className="hidden" />
-            </label>
-            {videoUrl && (
-              <button
-                type="button"
-                onClick={() => setVideoUrl("")}
-                className="px-3 py-2 rounded-xl border border-rose-500/20 bg-rose-500/10 text-rose-400 text-xs font-medium hover:bg-rose-500/20 shrink-0"
-              >
-                Xóa Video
-              </button>
-            )}
+          {/* Footer */}
+          <div className="flex gap-2.5 pt-3 border-t border-slate-800">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 py-2.5 rounded-xl border border-slate-700 text-slate-300 text-xs sm:text-sm font-medium hover:bg-slate-800 transition-colors"
+            >
+              Đóng
+            </button>
+            <button
+              type="button"
+              onClick={handleSaveMedia}
+              disabled={saving || uploading}
+              className="flex-1 py-2.5 rounded-xl bg-brand-500 text-white text-xs sm:text-sm font-semibold hover:bg-brand-600 flex items-center justify-center gap-2 shadow-lg shadow-brand-500/20 transition-colors"
+            >
+              {saving && <Loader2 size={16} className="animate-spin" />} Lưu Album Media
+            </button>
           </div>
         </div>
+      </Modal>
 
-        {uploading && (
-          <p className="text-xs text-brand-400 flex items-center gap-1">
-            <Loader2 size={13} className="animate-spin" /> Đang tải file phương tiện lên...
-          </p>
-        )}
-
-        <div className="flex gap-2.5 pt-3 border-t border-slate-800">
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex-1 py-2.5 rounded-xl border border-slate-700 text-slate-300 text-xs sm:text-sm font-medium hover:bg-slate-800"
-          >
-            Hủy
-          </button>
-          <button
-            type="button"
-            onClick={handleSaveMedia}
-            disabled={saving || uploading}
-            className="flex-1 py-2.5 rounded-xl bg-brand-500 text-white text-xs sm:text-sm font-semibold hover:bg-brand-600 flex items-center justify-center gap-2"
-          >
-            {saving && <Loader2 size={16} className="animate-spin" />} Lưu Album Media
-          </button>
-        </div>
-      </div>
-    </Modal>
+      {/* Image Zoom Modal phóng to HD */}
+      {zoomModalOpen && currentMediaUrl && !isCurrentVideo && (
+        <ImageZoomModal
+          open={zoomModalOpen}
+          onClose={() => setZoomModalOpen(false)}
+          imageUrl={currentMediaUrl}
+          title={`Chi tiết: ${group?.master_name || "Sản phẩm"}`}
+        />
+      )}
+    </>
   );
 }
 

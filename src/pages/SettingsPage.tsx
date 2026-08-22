@@ -24,6 +24,8 @@ import {
   EyeOff,
   CheckCircle2,
   AlertCircle,
+  Pencil,
+  X,
 } from "lucide-react";
 import {
   getOpenAiApiKey,
@@ -185,48 +187,303 @@ function SyncTab() {
 }
 
 function ColorsTab({ colors, setColors }: { colors: Color[]; setColors: (c: Color[]) => void }) {
-  const [form, setForm] = useState({ code: "", name: "", hex: "#FFFFFF" });
+  const [form, setForm] = useState({
+    code: "",
+    name: "",
+    hex: "#FFFFFF",
+    prompt_front: "",
+    prompt_back: "",
+  });
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [saving, setSaving] = useState(false);
 
-  async function add() {
-    if (!form.code.trim() || !form.name.trim()) return;
-    const { data, error } = await supabase.from("colors").insert({ code: form.code.trim(), name: form.name.trim(), hex: form.hex }).select().single();
-    if (error) { alert(error.message); return; }
-    setColors([...colors, data as Color].sort((a, b) => a.name.localeCompare(b.name)));
-    setForm({ code: "", name: "", hex: "#FFFFFF" });
+  function startEdit(c: Color) {
+    setEditingId(c.id);
+    setForm({
+      code: c.code,
+      name: c.name,
+      hex: c.hex || "#FFFFFF",
+      prompt_front: c.prompt_front || "",
+      prompt_back: c.prompt_back || "",
+    });
+    // Scroll to top smoothly
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setForm({ code: "", name: "", hex: "#FFFFFF", prompt_front: "", prompt_back: "" });
+  }
+
+  async function handleSave() {
+    if (!form.code.trim() || !form.name.trim()) {
+      alert("Vui lòng nhập đầy đủ Mã màu và Tên màu!");
+      return;
+    }
+    setSaving(true);
+    try {
+      const payload = {
+        code: form.code.trim().toUpperCase(),
+        name: form.name.trim(),
+        hex: form.hex,
+        prompt_front: form.prompt_front.trim() || null,
+        prompt_back: form.prompt_back.trim() || null,
+      };
+
+      if (editingId) {
+        const { data, error } = await supabase
+          .from("colors")
+          .update(payload)
+          .eq("id", editingId)
+          .select()
+          .single();
+        if (error) {
+          alert(error.message);
+          return;
+        }
+        setColors(
+          colors
+            .map((c) => (c.id === editingId ? (data as Color) : c))
+            .sort((a, b) => a.name.localeCompare(b.name))
+        );
+        cancelEdit();
+      } else {
+        const { data, error } = await supabase
+          .from("colors")
+          .insert(payload)
+          .select()
+          .single();
+        if (error) {
+          alert(error.message);
+          return;
+        }
+        setColors([...colors, data as Color].sort((a, b) => a.name.localeCompare(b.name)));
+        setForm({ code: "", name: "", hex: "#FFFFFF", prompt_front: "", prompt_back: "" });
+      }
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function remove(id: number) {
     if (!confirm("Xóa màu này?")) return;
     const { error } = await supabase.from("colors").delete().eq("id", id);
-    if (error) { alert(error.message); return; }
+    if (error) {
+      alert(error.message);
+      return;
+    }
     setColors(colors.filter((c) => c.id !== id));
+    if (editingId === id) {
+      cancelEdit();
+    }
   }
 
   return (
-    <div className="card-gradient rounded-2xl border border-slate-700/50 p-6">
-      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 mb-6">
-        <Field label="Mã màu" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })} placeholder="T" />
-        <Field label="Tên màu" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Trắng" />
-        <div className="space-y-1.5">
-          <label className="block text-sm font-medium text-slate-300">Màu hiển thị</label>
-          <input type="color" value={form.hex} onChange={(e) => setForm({ ...form, hex: e.target.value })} className="w-full h-[42px] rounded-xl border border-slate-700/50 bg-slate-800/50 cursor-pointer" />
+    <div className="space-y-6">
+      {/* Form thêm / chỉnh sửa màu */}
+      <div className={`card-gradient rounded-2xl border p-6 transition-all ${
+        editingId ? "border-brand-500/50 ring-2 ring-brand-500/20 bg-brand-500/5" : "border-slate-700/50"
+      }`}>
+        <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-700/50">
+          <div className="flex items-center gap-2">
+            <Palette className="w-5 h-5 text-brand-400" />
+            <h3 className="font-semibold text-slate-200">
+              {editingId ? "Chỉnh sửa màu sắc & Prompt AI" : "Thêm màu sắc mới"}
+            </h3>
+          </div>
+          {editingId && (
+            <button
+              onClick={cancelEdit}
+              className="flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 px-2.5 py-1 rounded-lg bg-slate-800 border border-slate-700"
+            >
+              <X size={13} /> Hủy chỉnh sửa
+            </button>
+          )}
         </div>
-        <div className="flex items-end">
-          <button onClick={add} className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-brand-500 text-white text-sm font-medium hover:bg-brand-600"><Plus size={18} /> Thêm</button>
+
+        {/* Thông tin cơ bản */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+          <Field
+            label="Mã màu"
+            value={form.code}
+            onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })}
+            placeholder="VD: T, D, XNV"
+          />
+          <Field
+            label="Tên màu"
+            value={form.name}
+            onChange={(e) => setForm({ ...form, name: e.target.value })}
+            placeholder="VD: Trắng, Đen, Xanh Navy"
+          />
+          <div className="space-y-1.5">
+            <label className="block text-sm font-medium text-slate-300">Màu hiển thị (HEX)</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="color"
+                value={form.hex}
+                onChange={(e) => setForm({ ...form, hex: e.target.value })}
+                className="w-12 h-[42px] rounded-xl border border-slate-700/50 bg-slate-800/50 cursor-pointer p-1"
+              />
+              <input
+                type="text"
+                value={form.hex}
+                onChange={(e) => setForm({ ...form, hex: e.target.value })}
+                className="flex-1 px-3.5 py-2.5 rounded-xl border border-slate-700/50 bg-slate-800/50 text-slate-100 font-mono text-sm uppercase outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500"
+                placeholder="#FFFFFF"
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* 2 Câu Prompt AI */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-5">
+          <div className="space-y-1.5">
+            <label className="flex items-center justify-between text-sm font-medium text-slate-300">
+              <span className="flex items-center gap-1.5 text-sky-400">
+                <Sparkles size={14} /> Prompt AI - Mặt trước (Front)
+              </span>
+              <span className="text-[11px] text-slate-500">Tùy chọn</span>
+            </label>
+            <textarea
+              rows={3}
+              value={form.prompt_front}
+              onChange={(e) => setForm({ ...form, prompt_front: e.target.value })}
+              placeholder="VD: plain white cotton t-shirt, clean front view mockup, solid studio lighting, centered, 8k resolution..."
+              className="w-full px-3.5 py-2 rounded-xl border border-slate-700/50 bg-slate-800/50 text-slate-100 placeholder-slate-500 outline-none text-xs leading-relaxed focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500 font-mono"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="flex items-center justify-between text-sm font-medium text-slate-300">
+              <span className="flex items-center gap-1.5 text-purple-400">
+                <Sparkles size={14} /> Prompt AI - Mặt sau (Back)
+              </span>
+              <span className="text-[11px] text-slate-500">Tùy chọn</span>
+            </label>
+            <textarea
+              rows={3}
+              value={form.prompt_back}
+              onChange={(e) => setForm({ ...form, prompt_back: e.target.value })}
+              placeholder="VD: plain white cotton t-shirt, clean back view mockup, solid studio lighting, centered, 8k resolution..."
+              className="w-full px-3.5 py-2 rounded-xl border border-slate-700/50 bg-slate-800/50 text-slate-100 placeholder-slate-500 outline-none text-xs leading-relaxed focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500 font-mono"
+            />
+          </div>
+        </div>
+
+        {/* Nút hành động */}
+        <div className="flex items-center justify-end gap-2.5">
+          {editingId && (
+            <button
+              onClick={cancelEdit}
+              type="button"
+              className="px-4 py-2.5 rounded-xl border border-slate-700 text-slate-300 text-sm font-medium hover:bg-slate-800 transition-colors"
+            >
+              Hủy
+            </button>
+          )}
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-brand-500 text-white text-sm font-medium hover:bg-brand-600 transition-colors disabled:opacity-50 shadow-lg shadow-brand-500/20"
+          >
+            {saving ? (
+              <Loader2 size={16} className="animate-spin" />
+            ) : editingId ? (
+              <Save size={16} />
+            ) : (
+              <Plus size={16} />
+            )}
+            {editingId ? "Lưu cập nhật màu" : "Thêm màu mới"}
+          </button>
         </div>
       </div>
-      {colors.length === 0 ? <EmptyState message="Chưa có màu nào." /> : (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-          {colors.map((c) => (
-            <div key={c.id} className="flex items-center gap-3 p-3 rounded-xl border border-slate-700/50 hover:border-slate-600 group">
-              <span className="w-8 h-8 rounded-full border border-slate-600 shrink-0" style={{ background: c.hex || "#ccc" }} />
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium text-slate-200 truncate">{c.name}</p>
-                <p className="text-xs text-slate-500 font-mono">{c.code}</p>
+
+      {/* Danh sách màu */}
+      {colors.length === 0 ? (
+        <div className="card-gradient rounded-2xl border border-slate-700/50 p-6">
+          <EmptyState message="Chưa có màu nào." />
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+          {colors.map((c) => {
+            const isEditingThis = editingId === c.id;
+            return (
+              <div
+                key={c.id}
+                className={`flex flex-col justify-between p-4 rounded-xl border transition-all ${
+                  isEditingThis
+                    ? "border-brand-500 bg-brand-500/10 ring-1 ring-brand-500/30"
+                    : "border-slate-700/50 hover:border-slate-600 bg-slate-900/40"
+                }`}
+              >
+                {/* Header card */}
+                <div className="flex items-center justify-between gap-3 mb-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <span
+                      className="w-8 h-8 rounded-full border-2 border-slate-600/80 shadow-md shrink-0"
+                      style={{ background: c.hex || "#ccc" }}
+                    />
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-slate-100 truncate">{c.name}</p>
+                      <span className="text-xs font-mono text-brand-400 bg-brand-500/10 px-1.5 py-0.5 rounded border border-brand-500/20">
+                        {c.code}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      onClick={() => startEdit(c)}
+                      title="Chỉnh sửa màu & Prompt"
+                      className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-800 hover:text-brand-400 transition-colors"
+                    >
+                      <Pencil size={14} />
+                    </button>
+                    <button
+                      onClick={() => remove(c.id)}
+                      title="Xóa màu"
+                      className="p-1.5 rounded-lg text-slate-400 hover:bg-rose-500/10 hover:text-rose-400 transition-colors"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Phần Prompt AI */}
+                <div className="space-y-2 pt-2 border-t border-slate-800/80">
+                  {c.prompt_front ? (
+                    <div className="bg-slate-950/60 rounded-lg p-2 border border-sky-500/20">
+                      <div className="text-[11px] font-semibold text-sky-400 mb-0.5 flex items-center gap-1">
+                        <Sparkles size={11} /> AI Mặt trước:
+                      </div>
+                      <p className="text-[11px] text-slate-300 font-mono line-clamp-2 leading-relaxed" title={c.prompt_front}>
+                        {c.prompt_front}
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="text-[11px] text-slate-500 italic py-0.5">
+                      Chưa có prompt mặt trước
+                    </div>
+                  )}
+
+                  {c.prompt_back ? (
+                    <div className="bg-slate-950/60 rounded-lg p-2 border border-purple-500/20">
+                      <div className="text-[11px] font-semibold text-purple-400 mb-0.5 flex items-center gap-1">
+                        <Sparkles size={11} /> AI Mặt sau:
+                      </div>
+                      <p className="text-[11px] text-slate-300 font-mono line-clamp-2 leading-relaxed" title={c.prompt_back}>
+                        {c.prompt_back}
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="text-[11px] text-slate-500 italic py-0.5">
+                      Chưa có prompt mặt sau
+                    </div>
+                  )}
+                </div>
               </div>
-              <button onClick={() => remove(c.id)} className="p-1.5 rounded-lg text-slate-600 hover:bg-rose-500/10 hover:text-rose-400 transition-colors opacity-0 group-hover:opacity-100"><Trash2 size={14} /></button>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
