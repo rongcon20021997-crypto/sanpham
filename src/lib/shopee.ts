@@ -409,14 +409,49 @@ export async function generateShopeeAuthUrl(customRedirect?: string): Promise<st
 /**
  * Đổi Mã ủy quyền (Auth Code) lấy Token và thêm/cập nhật Shop vào danh sách
  */
+/**
+ * Đổi Mã ủy quyền (Auth Code) lấy Token và thêm/cập nhật Shop vào danh sách
+ */
 export async function exchangeShopeeAuthCode(
   code: string,
   shopId: string,
   customShopName?: string
 ): Promise<ShopeeShop> {
-  const appConfig = getShopeeAppConfig();
+  // 1. Thử gọi qua Serverless API Proxy (Không bị chặn CORS, tự động đọc Key từ Supabase)
+  try {
+    const proxyRes = await fetch("/api/shopee/proxy?action=exchange_token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        code: code.trim(),
+        shop_id: shopId.trim(),
+        shopName: customShopName,
+      }),
+    });
+
+    const data = await proxyRes.json();
+    if (!proxyRes.ok) {
+      throw new Error(data.error || "Lỗi máy chủ khi đổi token");
+    }
+
+    if (data.shop) {
+      const saved = await saveShopeeShop(data.shop);
+      return saved;
+    }
+  } catch (proxyErr: any) {
+    console.warn("Proxy exchange failed, checking error:", proxyErr);
+    if (proxyErr.message && !proxyErr.message.includes("Failed to fetch")) {
+      throw proxyErr;
+    }
+  }
+
+  // 2. Fallback trực tiếp nếu không qua proxy
+  let appConfig = getShopeeAppConfig();
   if (!appConfig.partnerId || !appConfig.partnerKey) {
-    throw new Error("Chưa cấu hình Partner ID và Partner Key.");
+    appConfig = await fetchShopeeAppConfig();
+  }
+  if (!appConfig.partnerId || !appConfig.partnerKey) {
+    throw new Error("Chưa cấu hình Partner ID và Partner Key trong Cài đặt.");
   }
 
   const partnerId = appConfig.partnerId.trim();
@@ -445,10 +480,9 @@ export async function exchangeShopeeAuthCode(
 
   const accessToken = data.access_token;
   const refreshToken = data.refresh_token;
-  const expireIn = data.expire_in || 14400; // 4 giờ
+  const expireIn = data.expire_in || 14400;
   const tokenExpiresAt = Date.now() + expireIn * 1000;
 
-  // Thử gọi lấy tên Shop
   let shopName = customShopName || `Shop ${shopId}`;
   let country = "VN";
 
@@ -458,12 +492,8 @@ export async function exchangeShopeeAuthCode(
     const shopInfoUrl = `${host}${shopInfoPath}?partner_id=${partnerId}&timestamp=${timestamp}&access_token=${accessToken}&shop_id=${shopId}&sign=${shopInfoSign}`;
     const infoRes = await fetch(shopInfoUrl);
     const infoData = await infoRes.json();
-    if (infoData.shop_name) {
-      shopName = infoData.shop_name;
-    }
-    if (infoData.country) {
-      country = infoData.country;
-    }
+    if (infoData.shop_name) shopName = infoData.shop_name;
+    if (infoData.country) country = infoData.country;
   } catch (infoErr) {
     console.warn("Không thể lấy thông tin tên shop chi tiết:", infoErr);
   }
@@ -484,7 +514,6 @@ export async function exchangeShopeeAuthCode(
  * Làm mới Access Token cho một Shop cụ thể
  */
 export async function refreshShopeeShopToken(shopIdOrInternalId: string): Promise<ShopeeShop> {
-  const appConfig = getShopeeAppConfig();
   const shops = getShopeeShops();
   const shop = shops.find((s) => s.id === shopIdOrInternalId || s.shopId === shopIdOrInternalId);
 
@@ -493,6 +522,39 @@ export async function refreshShopeeShopToken(shopIdOrInternalId: string): Promis
   }
   if (!shop.refreshToken) {
     throw new Error(`Shop "${shop.shopName}" chưa có Refresh Token. Vui lòng ủy quyền lại.`);
+  }
+
+  // 1. Thử gọi qua Serverless API Proxy
+  try {
+    const proxyRes = await fetch("/api/shopee/proxy?action=refresh_token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        shop_id: shop.shopId,
+        refresh_token: shop.refreshToken,
+      }),
+    });
+
+    const data = await proxyRes.json();
+    if (proxyRes.ok && data.success) {
+      const updatedShop = await saveShopeeShop({
+        id: shop.id,
+        shopId: shop.shopId,
+        accessToken: data.accessToken,
+        refreshToken: data.refreshToken,
+        tokenExpiresAt: data.tokenExpiresAt,
+        status: "connected",
+      });
+      return updatedShop;
+    }
+  } catch (proxyErr) {
+    console.warn("Proxy refresh failed, falling back to direct:", proxyErr);
+  }
+
+  // 2. Direct Fallback
+  let appConfig = getShopeeAppConfig();
+  if (!appConfig.partnerId || !appConfig.partnerKey) {
+    appConfig = await fetchShopeeAppConfig();
   }
 
   const partnerId = appConfig.partnerId.trim();
@@ -544,7 +606,6 @@ export async function testShopeeShopConnection(shopIdOrInternalId: string): Prom
   message: string;
   shop?: ShopeeShop;
 }> {
-  const appConfig = getShopeeAppConfig();
   const shops = getShopeeShops();
   const shop = shops.find((s) => s.id === shopIdOrInternalId || s.shopId === shopIdOrInternalId);
 
@@ -552,12 +613,44 @@ export async function testShopeeShopConnection(shopIdOrInternalId: string): Prom
     return { success: false, message: "Không tìm thấy Shop trong danh sách." };
   }
 
-  if (!appConfig.partnerId || !appConfig.partnerKey) {
-    return { success: false, message: "Chưa cấu hình Partner ID và Partner Key cho Partner App." };
-  }
-
   if (!shop.accessToken) {
     return { success: false, message: `Shop "${shop.shopName}" chưa có Access Token. Hãy ủy quyền gian hàng để lấy token.` };
+  }
+
+  // 1. Thử gọi qua Serverless API Proxy
+  try {
+    const proxyRes = await fetch("/api/shopee/proxy?action=test_connection", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        shop_id: shop.shopId,
+        access_token: shop.accessToken,
+      }),
+    });
+
+    const data = await proxyRes.json();
+    if (proxyRes.ok && data.success) {
+      const updated = await saveShopeeShop({
+        id: shop.id,
+        shopId: shop.shopId,
+        shopName: data.shopName || shop.shopName,
+        country: data.country || shop.country || "VN",
+        status: "connected",
+      });
+      return {
+        success: true,
+        message: `Kết nối thành công tới gian hàng: "${updated.shopName}" (${updated.country})!`,
+        shop: updated,
+      };
+    }
+  } catch (proxyErr) {
+    console.warn("Proxy test failed, falling back to direct:", proxyErr);
+  }
+
+  // 2. Direct Fallback
+  let appConfig = getShopeeAppConfig();
+  if (!appConfig.partnerId || !appConfig.partnerKey) {
+    appConfig = await fetchShopeeAppConfig();
   }
 
   try {
