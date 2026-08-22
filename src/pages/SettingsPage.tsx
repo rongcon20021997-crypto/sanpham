@@ -874,38 +874,77 @@ function ShopeeTab() {
           </select>
         </div>
 
-        {/* Redirect URL */}
-        <div>
-          <div className="flex items-center justify-between mb-1.5">
-            <label className="text-xs font-semibold text-slate-300">
-              Redirect URL (URL chuyển hướng khi ủy quyền)
+        {/* Redirect URL (Chỉ hiển thị để copy dán vào Shopee Console) */}
+        <div className="p-3.5 rounded-xl bg-slate-900/90 border border-slate-700/60 space-y-2">
+          <div className="flex items-center justify-between">
+            <label className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+              <Globe size={14} className="text-brand-400" /> Redirect URL (URL chuyển hướng khi ủy quyền OAuth2)
             </label>
-            <button
-              type="button"
-              onClick={() =>
-                setAppConfig({
-                  ...appConfig,
-                  redirectUrl: typeof window !== "undefined" ? window.location.origin : "",
-                })
-              }
-              className="text-[11px] text-brand-400 hover:text-brand-300 hover:underline flex items-center gap-1 cursor-pointer"
-              title="Điền URL của môi trường hiện tại"
-            >
-              <Globe size={12} />
-              <span>Lấy URL hiện tại ({typeof window !== "undefined" ? window.location.origin : "localhost"})</span>
-            </button>
+            <span className="text-[11px] text-amber-400 font-medium">Tự động nhận diện</span>
           </div>
-          <div className="space-y-1.5">
+
+          <p className="text-[11px] text-slate-400">
+            Dán vào mục <strong>Redirect URL</strong> trên Shopee Console (<code>open.shopee.com</code>):
+          </p>
+
+          <div className="flex gap-2">
             <input
               type="text"
-              value={appConfig.redirectUrl}
-              onChange={(e) => setAppConfig({ ...appConfig, redirectUrl: e.target.value.trim() })}
-              placeholder={typeof window !== "undefined" ? `${window.location.origin} (Tự động phát hiện)` : "Tự động phát hiện theo môi trường"}
-              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-700/60 bg-slate-800/80 text-slate-100 text-xs font-mono outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500"
+              readOnly
+              value={typeof window !== "undefined" ? `${window.location.origin}/shopee-callback` : "http://localhost:5173/shopee-callback"}
+              className="w-full px-3 py-2 rounded-xl bg-slate-950 text-slate-200 text-xs font-mono border border-slate-800 select-all outline-none"
             />
-            <p className="text-[11px] text-slate-400">
-              💡 <em>Nếu để trống, hệ thống sẽ tự động bắt theo địa chỉ bạn đang truy cập (Localhost khi chạy máy cá nhân hoặc Tên miền khi chạy trên Server).</em>
-            </p>
+            <button
+              type="button"
+              onClick={() => {
+                const url = typeof window !== "undefined" ? `${window.location.origin}/shopee-callback` : "http://localhost:5173/shopee-callback";
+                navigator.clipboard.writeText(url);
+                setAppSaved(true);
+                setTimeout(() => setAppSaved(false), 2000);
+              }}
+              className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 text-xs font-semibold border border-slate-700 flex items-center gap-1.5 shrink-0 cursor-pointer transition-colors shadow-sm"
+              title="Sao chép Redirect URL"
+            >
+              <Globe size={13} className="text-brand-400" />
+              <span>Sao chép</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Webhook URL (Push Mechanism) */}
+        <div className="p-3.5 rounded-xl bg-slate-900/90 border border-slate-700/60 space-y-2">
+          <div className="flex items-center justify-between">
+            <label className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+              <Server size={14} className="text-emerald-400" /> Webhook URL (Push Mechanism Callback URL)
+            </label>
+            <span className="text-[11px] text-emerald-400 font-medium">Nhận sự kiện tự động</span>
+          </div>
+
+          <p className="text-[11px] text-slate-400">
+            Dán vào mục <strong>Push Mechanism Callback URL</strong> trên Shopee Console để nhận webhook tự động (đơn hàng, cập nhật shop...):
+          </p>
+
+          <div className="flex gap-2">
+            <input
+              type="text"
+              readOnly
+              value={typeof window !== "undefined" ? `${window.location.origin}/api/shopee/webhook` : "http://localhost:5173/api/shopee/webhook"}
+              className="w-full px-3 py-2 rounded-xl bg-slate-950 text-slate-200 text-xs font-mono border border-slate-800 select-all outline-none"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                const url = typeof window !== "undefined" ? `${window.location.origin}/api/shopee/webhook` : "http://localhost:5173/api/shopee/webhook";
+                navigator.clipboard.writeText(url);
+                setAppSaved(true);
+                setTimeout(() => setAppSaved(false), 2000);
+              }}
+              className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 text-xs font-semibold border border-slate-700 flex items-center gap-1.5 shrink-0 cursor-pointer transition-colors shadow-sm"
+              title="Sao chép Webhook URL"
+            >
+              <Server size={13} className="text-emerald-400" />
+              <span>Sao chép</span>
+            </button>
           </div>
         </div>
 

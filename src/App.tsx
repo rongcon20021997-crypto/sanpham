@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { LoginPage } from "@/pages/LoginPage";
 import { Layout, type PageKey } from "@/components/Layout";
@@ -14,15 +14,45 @@ import { ShopeeShopsPage } from "@/pages/ShopeeShopsPage";
 import { UsersPage } from "@/pages/UsersPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { Loader2 } from "lucide-react";
+import { exchangeShopeeAuthCode } from "@/lib/shopee";
 
 function AppContent() {
   const { session, profile, loading } = useAuth();
   const [page, setPage] = useState<PageKey>("dashboard");
+  const [shopeeAuthProcessing, setShopeeAuthProcessing] = useState(false);
 
-  if (loading) {
+  // Tự động bắt mã ủy quyền Shopee khi sàn Shopee redirect về
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("code");
+    const shopId = params.get("shop_id");
+
+    if (code && shopId) {
+      setShopeeAuthProcessing(true);
+      exchangeShopeeAuthCode(code, shopId)
+        .then((newShop) => {
+          // Xóa query params khỏi URL để sạch đẹp
+          window.history.replaceState({}, document.title, window.location.pathname);
+          setPage("shopee-shops");
+          alert(`🎉 Đã kết nối tự động thành công gian hàng Shopee: "${newShop.shopName}" (Shop ID: ${newShop.shopId})!`);
+        })
+        .catch((err) => {
+          alert(`Lỗi tự động kết nối Shopee: ${err.message}`);
+        })
+        .finally(() => {
+          setShopeeAuthProcessing(false);
+        });
+    }
+  }, []);
+
+  if (loading || shopeeAuthProcessing) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50">
-        <Loader2 className="animate-spin text-sky-400" size={32} />
+      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-950 text-slate-200 gap-3">
+        <Loader2 className="animate-spin text-brand-400" size={36} />
+        {shopeeAuthProcessing && (
+          <p className="text-sm font-semibold text-orange-400">Đang tự động xác thực và kết nối gian hàng Shopee...</p>
+        )}
       </div>
     );
   }

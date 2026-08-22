@@ -32,9 +32,16 @@ const STORAGE_KEY_SHOPEE_SHOPS = "sanpham_shopee_shops_v2";
 
 export function getCurrentRedirectUrl(): string {
   if (typeof window !== "undefined" && window.location.origin) {
-    return window.location.origin;
+    return `${window.location.origin}/shopee-callback`;
   }
-  return "http://localhost:5173";
+  return "http://localhost:5173/shopee-callback";
+}
+
+export function getCurrentWebhookUrl(): string {
+  if (typeof window !== "undefined" && window.location.origin) {
+    return `${window.location.origin}/api/shopee/webhook`;
+  }
+  return "http://localhost:5173/api/shopee/webhook";
 }
 
 export const DEFAULT_SHOPEE_APP_CONFIG: ShopeeAppConfig = {

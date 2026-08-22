@@ -113,7 +113,7 @@ export function ShopeeShopsPage({ onNavigateToSettings }: ShopeeShopsPageProps) 
       return;
     }
     try {
-      const url = await generateShopeeAuthUrl(appConfig.redirectUrl);
+      const url = await generateShopeeAuthUrl();
       setAuthUrl(url);
     } catch (err) {
       alert(`Lỗi tạo URL: ${(err as Error).message}`);
