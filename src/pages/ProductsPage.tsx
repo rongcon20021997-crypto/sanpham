@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
-import type { Product, Blank, PrintDesign, BlankType, LogoItem, Color } from "@/lib/types";
+import type { Product, Blank, PrintDesign, BlankType, LogoItem, Color, AIPrompt } from "@/lib/types";
+import { DEFAULT_AI_PROMPTS } from "@/lib/defaultPrompts";
 import { PageHeader, SearchInput, EmptyState } from "@/components/PageParts";
 import { Modal } from "@/components/Modal";
 import { ImageZoomModal, type ZoomImageItem } from "@/components/ImageZoomModal";
@@ -2261,6 +2262,42 @@ function MasterGroupMediaModal({
   const [copyingImageIdx, setCopyingImageIdx] = useState<number | null>(null);
   const [copiedImageIdx, setCopiedImageIdx] = useState<number | null>(null);
   const [copiedPromptIdx, setCopiedPromptIdx] = useState<number | null>(null);
+  const [copiedPromptTitle, setCopiedPromptTitle] = useState<string | null>(null);
+
+  // Danh sách các mẫu AI Prompt (đồng bộ từ Supabase/localStorage hoặc mặc định)
+  const [aiPromptsList, setAiPromptsList] = useState<AIPrompt[]>(() => {
+    try {
+      const cached = localStorage.getItem("sanpham_ai_prompts_cache");
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {}
+    return DEFAULT_AI_PROMPTS.map((p, i) => ({
+      ...p,
+      id: `default-${i}`,
+      created_at: new Date().toISOString(),
+    }));
+  });
+
+  useEffect(() => {
+    async function loadAiPrompts() {
+      try {
+        const { data, error } = await supabase
+          .from("ai_prompts")
+          .select("*")
+          .eq("is_active", true)
+          .order("created_at", { ascending: true });
+        if (!error && data && data.length > 0) {
+          setAiPromptsList(data as AIPrompt[]);
+          localStorage.setItem("sanpham_ai_prompts_cache", JSON.stringify(data));
+        }
+      } catch (err) {
+        console.warn("Không thể tải ai_prompts từ Supabase:", err);
+      }
+    }
+    loadAiPrompts();
+  }, []);
 
   // Copy hình ảnh phôi vào clipboard để dán vào ChatGPT (Ctrl+V)
   async function handleCopyImage(rawImageUrl: string | null | undefined, idx: number) {
@@ -2325,23 +2362,54 @@ function MasterGroupMediaModal({
     }
   }
 
-  // Copy câu Prompt đã thay thế tên màu thực tế
-  async function handleCopyPrompt(promptTemplate: string | null | undefined, colorName: string, idx: number) {
-    if (!promptTemplate || !promptTemplate.trim()) {
-      alert("Màu này chưa được cài đặt câu Prompt!");
+  // Copy câu Prompt ngẫu nhiên từ kho mẫu AI Prompt (lọc theo mặt trước / mặt sau và thay thế biến)
+  async function handleCopyPrompt(colorName: string, idx: number) {
+    const targetSide = isBack ? "back" : "front";
+
+    // Lọc mẫu prompt phù hợp theo side (front / back hoặc all)
+    let eligible = aiPromptsList.filter(
+      (p) => p.is_active !== false && (p.side === targetSide || p.side === "all")
+    );
+
+    if (eligible.length === 0) {
+      eligible = aiPromptsList.filter((p) => p.is_active !== false);
+    }
+    if (eligible.length === 0) {
+      eligible = DEFAULT_AI_PROMPTS.map((p, i) => ({
+        ...p,
+        id: `def-${i}`,
+      }));
+    }
+
+    // Lấy ngẫu nhiên 1 câu prompt từ mẫu AI
+    const randomItem = eligible[Math.floor(Math.random() * eligible.length)];
+    const rawTemplate = randomItem?.prompt || "";
+
+    if (!rawTemplate.trim()) {
+      alert("Không tìm thấy mẫu prompt nào!");
       return;
     }
 
-    const processedPrompt = promptTemplate
-      .replace(/{color}/gi, colorName || "")
+    let processedPrompt = rawTemplate
+      .replace(/{color}/gi, colorName || "Màu tiêu chuẩn")
       .replace(/{blank_type}/gi, group?.blank_type?.name || "Áo thun")
       .replace(/{design_name}/gi, group?.print_design?.name || group?.master_name || "Họa tiết")
       .replace(/{side}/gi, isBack ? "mặt sau" : "mặt trước");
 
+    // Nối thêm đoạn đầu câu: Asian model, Vietnamese
+    const prefix = "Asian model, Vietnamese, ";
+    if (!processedPrompt.toLowerCase().startsWith("asian model, vietnamese")) {
+      processedPrompt = prefix + processedPrompt;
+    }
+
     try {
       await navigator.clipboard.writeText(processedPrompt);
       setCopiedPromptIdx(idx);
-      setTimeout(() => setCopiedPromptIdx(null), 3000);
+      setCopiedPromptTitle(randomItem.title || "Mẫu AI Prompt");
+      setTimeout(() => {
+        setCopiedPromptIdx(null);
+        setCopiedPromptTitle(null);
+      }, 3500);
     } catch (err) {
       alert("Không thể copy text tự động!");
     }
@@ -2586,20 +2654,24 @@ function MasterGroupMediaModal({
 
                             <button
                               type="button"
-                              onClick={() => handleCopyPrompt(targetPrompt, colorName, idx)}
+                              onClick={() => handleCopyPrompt(colorName, idx)}
                               className={`flex-1 flex items-center justify-center gap-1 py-1 px-1.5 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
                                 isCopiedPrompt
                                   ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
                                   : "bg-brand-500/15 hover:bg-brand-500/25 text-brand-300 border border-brand-500/30 hover:border-brand-500/50"
                               }`}
-                              title={targetPrompt ? `Copy câu prompt: ${targetPrompt}` : `Chưa có prompt`}
+                              title={
+                                isCopiedPrompt && copiedPromptTitle
+                                  ? `Đã copy: ${copiedPromptTitle}`
+                                  : "Lấy ngẫu nhiên 1 câu Prompt từ kho mẫu AI Prompts cho màu này"
+                              }
                             >
                               {isCopiedPrompt ? (
                                 <Check size={11} className="text-emerald-400" />
                               ) : (
                                 <Sparkles size={11} className="text-amber-400" />
                               )}
-                              <span className="truncate">{isCopiedPrompt ? "Đã copy" : "Copy prompt"}</span>
+                              <span className="truncate">{isCopiedPrompt ? "Đã copy AI" : "Copy prompt AI"}</span>
                             </button>
                           </div>
                         </div>
