@@ -7,12 +7,18 @@ CREATE TABLE IF NOT EXISTS public.shopee_app_configs (
   partner_key text NOT NULL DEFAULT '',
   environment text NOT NULL DEFAULT 'live',
   redirect_url text NOT NULL DEFAULT '',
+  logistics_config jsonb DEFAULT '{}'::jsonb,
+  categories_config jsonb DEFAULT '[]'::jsonb,
   updated_at timestamptz DEFAULT now()
 );
 
+-- Cập nhật cột logistics_config và categories_config nếu bảng đã tồn tại trước đó
+ALTER TABLE public.shopee_app_configs ADD COLUMN IF NOT EXISTS logistics_config jsonb DEFAULT '{}'::jsonb;
+ALTER TABLE public.shopee_app_configs ADD COLUMN IF NOT EXISTS categories_config jsonb DEFAULT '[]'::jsonb;
+
 -- Thêm dòng cấu hình mặc định id = 1 nếu chưa có
-INSERT INTO public.shopee_app_configs (id, partner_id, partner_key, environment, redirect_url)
-VALUES (1, '', '', 'live', '')
+INSERT INTO public.shopee_app_configs (id, partner_id, partner_key, environment, redirect_url, logistics_config, categories_config)
+VALUES (1, '', '', 'live', '', '{}'::jsonb, '[]'::jsonb)
 ON CONFLICT (id) DO NOTHING;
 
 -- Bảng 2: Danh sách Gian Hàng Shopee
@@ -27,9 +33,12 @@ CREATE TABLE IF NOT EXISTS public.shopee_shops (
   status text NOT NULL DEFAULT 'disconnected',
   is_default boolean NOT NULL DEFAULT false,
   note text DEFAULT '',
+  logistics_config jsonb DEFAULT '{}'::jsonb,
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
 );
+
+ALTER TABLE public.shopee_shops ADD COLUMN IF NOT EXISTS logistics_config jsonb DEFAULT '{}'::jsonb;
 
 -- Bảng 3: Nhật Ký Webhook (Shopee Push Notifications & Events)
 CREATE TABLE IF NOT EXISTS public.shopee_webhook_logs (

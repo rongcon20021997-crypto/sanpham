@@ -16,6 +16,15 @@ function calculateHmacSha256(key: string, message: string): string {
   return crypto.createHmac("sha256", key).update(message).digest("hex");
 }
 
+async function safeFetchJson(response: any) {
+  try {
+    const text = await response.text();
+    return text ? JSON.parse(text) : {};
+  } catch {
+    return { error: "Phản hồi không hợp lệ từ máy chủ Shopee." };
+  }
+}
+
 function generateShopeeSignature(
   partnerId: string,
   partnerKey: string,
@@ -95,7 +104,7 @@ export default async function handler(req: any, res: any) {
         }),
       });
 
-      const tokenData = await tokenRes.json();
+      const tokenData = await safeFetchJson(tokenRes);
       if (tokenData.error) {
         return res.status(400).json({
           error: tokenData.message || tokenData.error,
@@ -117,7 +126,7 @@ export default async function handler(req: any, res: any) {
         const infoSign = generateShopeeSignature(partnerId, partnerKey, infoPath, timestamp, accessToken, shopId);
         const infoUrl = `${host}${infoPath}?partner_id=${Number(partnerId)}&timestamp=${timestamp}&access_token=${accessToken}&shop_id=${Number(shopId)}&sign=${infoSign}`;
         const infoRes = await fetch(infoUrl);
-        const infoData = await infoRes.json();
+        const infoData = await safeFetchJson(infoRes);
         if (infoData.shop_name) shopName = infoData.shop_name;
         if (infoData.country) country = infoData.country;
       } catch (err) {
@@ -178,7 +187,7 @@ export default async function handler(req: any, res: any) {
         }),
       });
 
-      const refreshData = await refreshRes.json();
+      const refreshData = await safeFetchJson(refreshRes);
       if (refreshData.error) {
         return res.status(400).json({
           error: refreshData.message || refreshData.error,
@@ -222,7 +231,7 @@ export default async function handler(req: any, res: any) {
       const url = `${host}${apiPath}?partner_id=${Number(partnerId)}&timestamp=${timestamp}&access_token=${accessToken}&shop_id=${Number(shopId)}&sign=${sign}`;
 
       const infoRes = await fetch(url);
-      const infoData = await infoRes.json();
+      const infoData = await safeFetchJson(infoRes);
 
       if (infoData.error) {
         return res.status(400).json({
@@ -275,7 +284,7 @@ export default async function handler(req: any, res: any) {
       const url = `${host}${apiPath}?partner_id=${Number(partnerId)}&timestamp=${timestamp}&access_token=${accessToken}&shop_id=${Number(shopId)}&sign=${sign}`;
 
       const logRes = await fetch(url);
-      const logData = await logRes.json();
+      const logData = await safeFetchJson(logRes);
 
       if (logData.error) {
         return res.status(400).json({
@@ -307,6 +316,126 @@ export default async function handler(req: any, res: any) {
         success: true,
         shopId,
         channels,
+      });
+    }
+
+    // 5. ACTION: KÉO DANH MỤC SẢN PHẨM (GET CATEGORY LIST)
+    if (action === "get_categories" || action === "get_category") {
+      let shopId = String(body.shop_id || body.shopId || req.query.shop_id || req.query.shopId || "").trim();
+      let accessToken = String(body.access_token || body.accessToken || "").trim();
+      const language = String(body.language || req.query.language || "vi").trim();
+
+      if (!shopId || !accessToken) {
+        const { data: shops } = await supabase.from("shopee_shops").select("*");
+        const shop = shopId
+          ? shops?.find((s: any) => String(s.shop_id) === shopId)
+          : shops?.find((s: any) => s.is_default) || shops?.[0];
+
+        if (shop) {
+          shopId = String(shop.shop_id);
+          accessToken = shop.access_token;
+        }
+      }
+
+      if (!shopId || !accessToken) {
+        return res.status(400).json({ error: "Không tìm thấy gian hàng Shopee nào có token để kéo danh mục." });
+      }
+
+      const apiPath = "/api/v2/product/get_category";
+      const timestamp = Math.floor(Date.now() / 1000);
+      const sign = generateShopeeSignature(partnerId, partnerKey, apiPath, timestamp, accessToken, shopId);
+      const url = `${host}${apiPath}?partner_id=${Number(partnerId)}&timestamp=${timestamp}&access_token=${accessToken}&shop_id=${Number(shopId)}&sign=${sign}&language=${language}`;
+
+      const catRes = await fetch(url);
+      const catData = await safeFetchJson(catRes);
+
+      if (catData.error) {
+        return res.status(400).json({
+          error: catData.message || catData.error,
+          detail: catData,
+        });
+      }
+
+      const rawList = catData.response?.category_list || [];
+      const categories = rawList.map((cat: any) => ({
+        categoryId: cat.category_id,
+        parentCategoryId: cat.parent_category_id,
+        originalCategoryName: cat.original_category_name,
+        displayCategoryName: cat.display_category_name || cat.original_category_name,
+        hasChildren: Boolean(cat.has_children),
+      }));
+
+      return res.status(200).json({
+        success: true,
+        shopId,
+        categories,
+      });
+    }
+
+    // 6. ACTION: KÉO THUỘC TÍNH DANH MỤC (GET ATTRIBUTES LIST)
+    if (action === "get_attributes" || action === "get_attribute") {
+      let shopId = String(body.shop_id || body.shopId || req.query.shop_id || req.query.shopId || "").trim();
+      let accessToken = String(body.access_token || body.accessToken || "").trim();
+      const categoryId = String(body.category_id || body.categoryId || req.query.category_id || req.query.categoryId || "").trim();
+      const language = String(body.language || req.query.language || "vi").trim();
+
+      if (!categoryId) {
+        return res.status(400).json({ error: "Thiếu category_id để lấy thuộc tính." });
+      }
+
+      if (!shopId || !accessToken) {
+        const { data: shops } = await supabase.from("shopee_shops").select("*");
+        const shop = shopId
+          ? shops?.find((s: any) => String(s.shop_id) === shopId)
+          : shops?.find((s: any) => s.is_default) || shops?.[0];
+
+        if (shop) {
+          shopId = String(shop.shop_id);
+          accessToken = shop.access_token;
+        }
+      }
+
+      if (!shopId || !accessToken) {
+        return res.status(400).json({ error: "Không tìm thấy gian hàng Shopee nào có token để lấy thuộc tính." });
+      }
+
+      const apiPath = "/api/v2/product/get_attributes";
+      const timestamp = Math.floor(Date.now() / 1000);
+      const sign = generateShopeeSignature(partnerId, partnerKey, apiPath, timestamp, accessToken, shopId);
+      const url = `${host}${apiPath}?partner_id=${Number(partnerId)}&timestamp=${timestamp}&access_token=${accessToken}&shop_id=${Number(shopId)}&sign=${sign}&category_id=${Number(categoryId)}&language=${language}`;
+
+      const attrRes = await fetch(url);
+      const attrData = await safeFetchJson(attrRes);
+
+      if (attrData.error) {
+        return res.status(400).json({
+          error: attrData.message || attrData.error,
+          detail: attrData,
+        });
+      }
+
+      const rawList = attrData.response?.attribute_list || [];
+      const attributes = rawList.map((attr: any) => ({
+        attributeId: attr.attribute_id,
+        originalAttributeName: attr.original_attribute_name,
+        displayAttributeName: attr.display_attribute_name || attr.original_attribute_name,
+        isMandatory: Boolean(attr.is_mandatory),
+        inputType: attr.input_type,
+        attributeType: attr.attribute_type,
+        attributeUnit: attr.attribute_unit || [],
+        attributeValueList: (attr.attribute_value_list || []).map((val: any) => ({
+          valueId: val.value_id,
+          originalValueName: val.original_value_name,
+          displayValueName: val.display_value_name || val.original_value_name,
+          valueUnit: val.value_unit,
+        })),
+      }));
+
+      return res.status(200).json({
+        success: true,
+        shopId,
+        categoryId: Number(categoryId),
+        attributes,
       });
     }
 

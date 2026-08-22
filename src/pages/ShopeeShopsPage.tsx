@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { PageHeader } from "@/components/PageParts";
 import { Modal } from "@/components/Modal";
 import {
@@ -17,10 +17,20 @@ import {
   getShopeeDefaultLogisticsConfig,
   fetchShopeeDefaultLogisticsConfig,
   saveShopeeDefaultLogisticsConfig,
+  getShopeePresetCategories,
+  fetchShopeePresetCategories,
+  saveShopeePresetCategory,
+  deleteShopeePresetCategory,
+  setDefaultShopeePresetCategory,
+  fetchShopeeCategories,
+  fetchShopeeCategoryAttributes,
   type ShopeeAppConfig,
   type ShopeeShop,
   type ShopeeLogisticsChannel,
   type ShopeeDefaultLogisticsConfig,
+  type ShopeeCategory,
+  type ShopeeCategoryAttribute,
+  type ShopeePresetCategory,
 } from "@/lib/shopee";
 import {
   Store,
@@ -48,6 +58,12 @@ import {
   Box,
   Package,
   Info,
+  Layers,
+  FolderTree,
+  Tag,
+  Search,
+  Sliders,
+  Sparkles,
 } from "lucide-react";
 
 import { supabase } from "@/lib/supabase";
@@ -70,7 +86,7 @@ export function ShopeeShopsPage({ onNavigateToSettings }: ShopeeShopsPageProps) 
   const [appConfig, setAppConfig] = useState<ShopeeAppConfig>(getShopeeAppConfig());
   const [shops, setShops] = useState<ShopeeShop[]>(getShopeeShops());
   const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<"shops" | "logistics" | "webhook-logs">("shops");
+  const [activeTab, setActiveTab] = useState<"shops" | "logistics" | "categories" | "webhook-logs">("shops");
 
   // Logistics state
   const [logisticsConfig, setLogisticsConfig] = useState<ShopeeDefaultLogisticsConfig>(getShopeeDefaultLogisticsConfig());
@@ -78,6 +94,28 @@ export function ShopeeShopsPage({ onNavigateToSettings }: ShopeeShopsPageProps) 
   const [loadingLogistics, setLoadingLogistics] = useState(false);
   const [savingLogistics, setSavingLogistics] = useState(false);
   const [selectedLogisticsShopId, setSelectedLogisticsShopId] = useState<string>("");
+
+  // Preset Categories state
+  const [presetCategories, setPresetCategories] = useState<ShopeePresetCategory[]>(getShopeePresetCategories());
+  const [shopeeCategories, setShopeeCategories] = useState<ShopeeCategory[]>([]);
+  const [loadingCategories, setLoadingCategories] = useState(false);
+  const [selectedCategoryShopId, setSelectedCategoryShopId] = useState<string>("");
+  const [presetSearchTerm, setPresetSearchTerm] = useState("");
+
+  // Modal Preset Category state
+  const [presetModalOpen, setPresetModalOpen] = useState(false);
+  const [editingPreset, setEditingPreset] = useState<Partial<ShopeePresetCategory>>({
+    name: "",
+    categoryId: 0,
+    categoryNamePath: "",
+    isDefault: false,
+    attributes: {},
+    note: "",
+  });
+  const [categoryAttributes, setCategoryAttributes] = useState<ShopeeCategoryAttribute[]>([]);
+  const [loadingAttributes, setLoadingAttributes] = useState(false);
+  const [modalCatSearch, setModalCatSearch] = useState("");
+  const [savingPreset, setSavingPreset] = useState(false);
 
   // Webhook logs state
   const [webhookLogs, setWebhookLogs] = useState<WebhookLog[]>([]);
@@ -118,17 +156,20 @@ export function ShopeeShopsPage({ onNavigateToSettings }: ShopeeShopsPageProps) 
   async function loadDataFromSupabase() {
     setLoading(true);
     try {
-      const [cfg, shps, logCfg] = await Promise.all([
+      const [cfg, shps, logCfg, presets] = await Promise.all([
         fetchShopeeAppConfig(),
         fetchShopeeShops(),
         fetchShopeeDefaultLogisticsConfig(),
+        fetchShopeePresetCategories(),
       ]);
       setAppConfig(cfg);
       setShops(shps);
       setLogisticsConfig(logCfg);
+      setPresetCategories(presets);
       if (shps.length > 0 && !selectedLogisticsShopId) {
         const def = shps.find((s) => s.isDefault) || shps[0];
         setSelectedLogisticsShopId(def.shopId);
+        setSelectedCategoryShopId(def.shopId);
       }
     } catch (e) {
       console.warn("Lỗi tải Shopee từ Supabase:", e);
@@ -142,13 +183,181 @@ export function ShopeeShopsPage({ onNavigateToSettings }: ShopeeShopsPageProps) 
     try {
       const res = await fetchShopeeLogisticsChannels(shopId || selectedLogisticsShopId);
       setLogisticsChannels(res.channels);
-      showToast(`🚚 Đã tải thành công ${res.channels.length} kênh vận chuyển từ Shopee!`);
+      showToast(`🚚 Đã tải thành công ${res.channels.length} kênh vận chuyển thực tế từ Shopee!`);
     } catch (err: any) {
       alert(`Lỗi kéo kênh vận chuyển: ${err.message}`);
     } finally {
       setLoadingLogistics(false);
     }
   }
+
+  async function loadShopeeCategories(shopId?: string) {
+    setLoadingCategories(true);
+    try {
+      const targetShopId = shopId || selectedCategoryShopId || defaultShop?.shopId;
+      const res = await fetchShopeeCategories(targetShopId);
+      setShopeeCategories(res.categories);
+      showToast(`📁 Đã tải thành công ${res.categories.length} danh mục thực tế từ Shopee!`);
+    } catch (err: any) {
+      alert(`Lỗi kéo danh mục từ Shopee: ${err.message}`);
+    } finally {
+      setLoadingCategories(false);
+    }
+  }
+
+  function getCategoryPath(catId: number, allCats: ShopeeCategory[]): string {
+    const map = new Map<number, ShopeeCategory>();
+    allCats.forEach((c) => map.set(c.categoryId, c));
+
+    const parts: string[] = [];
+    let curr = map.get(catId);
+    while (curr) {
+      parts.unshift(curr.displayCategoryName || curr.originalCategoryName);
+      if (curr.parentCategoryId && curr.parentCategoryId !== 0) {
+        curr = map.get(curr.parentCategoryId);
+      } else {
+        break;
+      }
+    }
+    return parts.join(" > ") || `Danh mục #${catId}`;
+  }
+
+  async function handleCategorySelect(cat: ShopeeCategory) {
+    const path = getCategoryPath(cat.categoryId, shopeeCategories);
+    setEditingPreset((prev) => ({
+      ...prev,
+      categoryId: cat.categoryId,
+      categoryNamePath: path,
+    }));
+
+    // Kéo thuộc tính cho danh mục đã chọn
+    setLoadingAttributes(true);
+    try {
+      const targetShopId = selectedCategoryShopId || defaultShop?.shopId;
+      const res = await fetchShopeeCategoryAttributes(cat.categoryId, targetShopId);
+      setCategoryAttributes(res.attributes);
+    } catch (err) {
+      console.warn("Không thể kéo thuộc tính danh mục:", err);
+      setCategoryAttributes([]);
+    } finally {
+      setLoadingAttributes(false);
+    }
+  }
+
+  function openCreatePresetModal() {
+    setEditingPreset({
+      name: "",
+      categoryId: 0,
+      categoryNamePath: "",
+      isDefault: presetCategories.length === 0,
+      attributes: {
+        "Thương hiệu": "No Brand",
+        "Chất liệu": "Cotton 100%",
+        "Xuất xứ": "Việt Nam",
+        "Phong cách": "Basic / Unisex / Streetwear",
+      },
+      note: "",
+    });
+    setCategoryAttributes([]);
+    setModalCatSearch("");
+    setPresetModalOpen(true);
+    if (shopeeCategories.length === 0) {
+      loadShopeeCategories();
+    }
+  }
+
+  async function openEditPresetModal(preset: ShopeePresetCategory) {
+    setEditingPreset({ ...preset, attributes: { ...(preset.attributes || {}) } });
+    setModalCatSearch("");
+    setPresetModalOpen(true);
+
+    if (shopeeCategories.length === 0) {
+      loadShopeeCategories();
+    }
+
+    if (preset.categoryId) {
+      setLoadingAttributes(true);
+      try {
+        const targetShopId = selectedCategoryShopId || defaultShop?.shopId;
+        const res = await fetchShopeeCategoryAttributes(preset.categoryId, targetShopId);
+        setCategoryAttributes(res.attributes);
+      } catch (err) {
+        console.warn("Lỗi tải thuộc tính:", err);
+      } finally {
+        setLoadingAttributes(false);
+      }
+    }
+  }
+
+  async function handleSavePreset() {
+    if (!editingPreset.name?.trim()) {
+      alert("Vui lòng nhập tên cấu hình danh mục.");
+      return;
+    }
+    if (!editingPreset.categoryId) {
+      alert("Vui lòng chọn một danh mục Shopee.");
+      return;
+    }
+
+    setSavingPreset(true);
+    try {
+      const saved = await saveShopeePresetCategory(editingPreset);
+      const updatedList = getShopeePresetCategories();
+      setPresetCategories(updatedList);
+      setPresetModalOpen(false);
+      showToast(`💾 Đã lưu cấu hình danh mục "${saved.name}"!`);
+    } catch (err: any) {
+      alert(`Lỗi lưu danh mục: ${err.message}`);
+    } finally {
+      setSavingPreset(false);
+    }
+  }
+
+  async function handleDeletePreset(preset: ShopeePresetCategory) {
+    if (window.confirm(`Bạn có chắc muốn xóa cấu hình danh mục "${preset.name}"?`)) {
+      const remaining = await deleteShopeePresetCategory(preset.id);
+      setPresetCategories(remaining);
+      showToast(`Đã xóa cấu hình danh mục "${preset.name}".`);
+    }
+  }
+
+  async function handleSetDefaultPreset(preset: ShopeePresetCategory) {
+    const updated = await setDefaultShopeePresetCategory(preset.id);
+    setPresetCategories(updated);
+    showToast(`⭐ Đã đặt "${preset.name}" làm cấu hình danh mục mặc định!`);
+  }
+
+  const leafCategories = useMemo(() => {
+    return shopeeCategories.filter((c) => !c.hasChildren);
+  }, [shopeeCategories]);
+
+  const filteredLeafCategories = useMemo(() => {
+    if (!modalCatSearch.trim()) return leafCategories.slice(0, 60);
+    const q = modalCatSearch.toLowerCase().trim();
+    return leafCategories
+      .filter((c) => {
+        const path = getCategoryPath(c.categoryId, shopeeCategories).toLowerCase();
+        return (
+          c.displayCategoryName.toLowerCase().includes(q) ||
+          c.originalCategoryName.toLowerCase().includes(q) ||
+          String(c.categoryId).includes(q) ||
+          path.includes(q)
+        );
+      })
+      .slice(0, 60);
+  }, [leafCategories, modalCatSearch, shopeeCategories]);
+
+  const filteredPresets = useMemo(() => {
+    if (!presetSearchTerm.trim()) return presetCategories;
+    const q = presetSearchTerm.toLowerCase().trim();
+    return presetCategories.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        p.categoryNamePath.toLowerCase().includes(q) ||
+        String(p.categoryId).includes(q) ||
+        (p.note && p.note.toLowerCase().includes(q))
+    );
+  }, [presetCategories, presetSearchTerm]);
 
   async function handleSaveLogistics() {
     setSavingLogistics(true);
@@ -448,6 +657,24 @@ export function ShopeeShopsPage({ onNavigateToSettings }: ShopeeShopsPageProps) 
         <button
           type="button"
           onClick={() => {
+            setActiveTab("categories");
+            if (shopeeCategories.length === 0) {
+              loadShopeeCategories();
+            }
+          }}
+          className={`px-4 py-2 rounded-xl font-bold text-xs flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
+            activeTab === "categories"
+              ? "bg-brand-500 text-white shadow-lg shadow-brand-500/20"
+              : "bg-slate-900 text-slate-400 hover:text-slate-200"
+          }`}
+        >
+          <Layers size={15} className="text-purple-400" />
+          <span>Lưu sẵn Danh mục ({presetCategories.length})</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
             setActiveTab("webhook-logs");
             loadWebhookLogs();
           }}
@@ -698,9 +925,7 @@ export function ShopeeShopsPage({ onNavigateToSettings }: ShopeeShopsPageProps) 
                 <button
                   type="button"
                   onClick={() => {
-                    const allIds = (logisticsChannels.length > 0 ? logisticsChannels : [
-                      { channelId: 50021 }, { channelId: 50011 }, { channelId: 50012 }, { channelId: 50018 }, { channelId: 50015 }
-                    ]).map((c) => c.channelId);
+                    const allIds = logisticsChannels.map((c) => c.channelId);
                     setLogisticsConfig({ ...logisticsConfig, selectedChannelIds: allIds });
                   }}
                   className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold border border-slate-700 cursor-pointer"
@@ -987,7 +1212,7 @@ export function ShopeeShopsPage({ onNavigateToSettings }: ShopeeShopsPageProps) 
                 </div>
                 <button
                   type="button"
-                  onClick={handleExchangeAuthCode}
+                  onClick={handleExchangeCode}
                   disabled={exchanging || !exchangeCode.trim() || !exchangeShopId.trim()}
                   className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-lg shadow-emerald-600/20 transition-all flex items-center justify-center gap-1.5 disabled:opacity-50 cursor-pointer mt-2"
                 >
@@ -1128,7 +1353,7 @@ export function ShopeeShopsPage({ onNavigateToSettings }: ShopeeShopsPageProps) 
                       {shop.refreshToken && (
                         <button
                           type="button"
-                          onClick={() => handleRefreshShopToken(shop)}
+                          onClick={() => handleRefreshToken(shop)}
                           disabled={isActionLoading}
                           className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 flex items-center gap-1.5 cursor-pointer disabled:opacity-40"
                           title="Làm mới token"
@@ -1197,31 +1422,328 @@ export function ShopeeShopsPage({ onNavigateToSettings }: ShopeeShopsPageProps) 
       </>
       )}
 
-      {/* MODAL XEM CHI TIẾT WEBHOOK JSON */}
+        {/* PRESET CATEGORIES CONFIGURATION TAB */}
+      {activeTab === "categories" && (
+        <div className="space-y-6 animate-fade-in">
+          {/* Header Card & Actions */}
+          <div className="card-gradient rounded-2xl border border-slate-700/50 p-6 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <h3 className="font-semibold text-slate-100 text-base mb-1 flex items-center gap-2">
+                  <Layers size={18} className="text-purple-400" /> Cấu Hình Danh Mục Sản Phẩm Lưu Sẵn (Categories Preset)
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Lưu sẵn các ngành hàng Shopee (ID & Tên phân cấp) cùng thuộc tính mặc định để áp dụng nhanh khi đồng bộ sản phẩm/áo thun lên Shopee.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2 flex-wrap">
+                {/* Shop selector */}
+                {shops.length > 0 && (
+                  <select
+                    value={selectedCategoryShopId}
+                    onChange={(e) => setSelectedCategoryShopId(e.target.value)}
+                    className="px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs font-semibold outline-none focus:border-brand-500 cursor-pointer"
+                  >
+                    {shops.map((s) => (
+                      <option key={s.id} value={s.shopId}>
+                        Shop: {s.shopName} {s.isDefault ? "⭐ (Chính)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => loadShopeeCategories()}
+                  disabled={loadingCategories}
+                  className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 flex items-center gap-1.5 cursor-pointer shadow-sm disabled:opacity-50"
+                  title="Đồng bộ danh sách cây danh mục thật từ Shopee Open API"
+                >
+                  <RefreshCw size={13} className={loadingCategories ? "animate-spin text-purple-400" : "text-purple-400"} />
+                  <span>{loadingCategories ? "Đang kéo..." : "Đồng bộ Danh mục Shopee"}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={openCreatePresetModal}
+                  className="px-4 py-2 rounded-xl bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700 text-white text-xs font-bold shadow-lg shadow-purple-500/20 flex items-center gap-1.5 transition-all cursor-pointer"
+                >
+                  <Plus size={14} />
+                  <span>+ Thêm Cấu Hình Danh Mục</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Filter Search Bar */}
+            <div className="flex items-center gap-3 pt-2">
+              <div className="relative flex-1">
+                <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  value={presetSearchTerm}
+                  onChange={(e) => setPresetSearchTerm(e.target.value)}
+                  placeholder="Tìm nhanh cấu hình danh mục theo tên, đường dẫn danh mục hoặc ID..."
+                  className="w-full pl-9 pr-4 py-2 rounded-xl border border-slate-700/60 bg-slate-900/90 text-slate-100 text-xs outline-none focus:border-purple-500"
+                />
+              </div>
+
+              {shopeeCategories.length > 0 && (
+                <span className="text-[11px] text-slate-400 font-mono hidden sm:inline-block">
+                  📦 Đã nạp <strong>{shopeeCategories.length}</strong> danh mục Shopee
+                </span>
+              )}
+            </div>
+
+            {/* Presets Cards Grid */}
+            {presetCategories.length === 0 ? (
+              <div className="p-10 text-center rounded-2xl bg-slate-900/50 border border-dashed border-slate-800 space-y-3">
+                <FolderTree size={36} className="mx-auto text-purple-400/60" />
+                <h4 className="font-semibold text-slate-200 text-sm">Chưa có Cấu hình Danh mục lưu sẵn nào</h4>
+                <p className="text-xs text-slate-400 max-w-md mx-auto">
+                  Tạo các cấu hình danh mục sẵn (như Áo Thun Nam, Áo Thun Nữ, Hoodie) để khi đồng bộ sản phẩm, hệ thống tự động điền đúng danh mục và thuộc tính lên Shopee!
+                </p>
+                <button
+                  type="button"
+                  onClick={openCreatePresetModal}
+                  className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-lg shadow-purple-600/20 cursor-pointer"
+                >
+                  <Plus size={14} />
+                  <span>Tạo Cấu Hình Danh Mục Đầu Tiên</span>
+                </button>
+              </div>
+            ) : filteredPresets.length === 0 ? (
+              <div className="p-8 text-center rounded-2xl bg-slate-900/30 border border-slate-800 text-xs text-slate-400">
+                Không tìm thấy cấu hình danh mục nào khớp với từ khóa "{presetSearchTerm}".
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {filteredPresets.map((preset) => {
+                  const isDefault = preset.isDefault;
+                  const attrEntries = Object.entries(preset.attributes || {});
+
+                  return (
+                    <div
+                      key={preset.id}
+                      className={`p-5 rounded-2xl border transition-all space-y-3.5 relative flex flex-col justify-between ${
+                        isDefault
+                          ? "bg-slate-900/90 border-purple-500/50 shadow-md shadow-purple-500/5 ring-1 ring-purple-500/30"
+                          : "bg-slate-900/50 border-slate-800 hover:border-slate-700"
+                      }`}
+                    >
+                      {/* Top row */}
+                      <div className="space-y-2">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className="p-2 rounded-xl bg-purple-500/10 text-purple-400 border border-purple-500/20">
+                              <Tag size={16} />
+                            </span>
+                            <div>
+                              <h4 className="font-bold text-sm text-slate-100 flex items-center gap-1.5">
+                                <span>{preset.name}</span>
+                                {isDefault && (
+                                  <span className="px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 font-bold text-[10px] flex items-center gap-1">
+                                    <Star size={10} className="fill-purple-400 text-purple-400" /> Mặc định
+                                  </span>
+                                )}
+                              </h4>
+                              <span className="text-[10px] font-mono text-purple-400 font-bold">
+                                Category ID: #{preset.categoryId}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Category Path */}
+                        <div className="p-2.5 rounded-xl bg-slate-950/70 border border-slate-800/80 text-[11px] text-slate-300 flex items-center gap-1.5">
+                          <FolderTree size={13} className="shrink-0 text-slate-400" />
+                          <span className="truncate font-semibold" title={preset.categoryNamePath}>
+                            {preset.categoryNamePath || `Danh mục #${preset.categoryId}`}
+                          </span>
+                        </div>
+
+                        {/* Preset Attributes Badges */}
+                        {attrEntries.length > 0 && (
+                          <div className="space-y-1 pt-1">
+                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                              Thuộc tính mặc định ({attrEntries.length}):
+                            </span>
+                            <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
+                              {attrEntries.map(([key, val]) => (
+                                <span
+                                  key={key}
+                                  className="text-[10px] px-2 py-0.5 rounded-md bg-slate-800/90 text-slate-300 border border-slate-700/80 font-medium"
+                                  title={`${key}: ${String(val)}`}
+                                >
+                                  <strong className="text-slate-400">{key}:</strong> {String(val)}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {preset.note && (
+                          <p className="text-[11px] text-slate-400 italic pt-1 border-t border-slate-800/60">
+                            📝 {preset.note}
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Card Actions */}
+                      <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between gap-2">
+                        {!isDefault ? (
+                          <button
+                            type="button"
+                            onClick={() => handleSetDefaultPreset(preset)}
+                            className="text-[11px] px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-purple-950 hover:text-purple-300 text-slate-400 font-semibold border border-slate-700 flex items-center gap-1 transition-colors cursor-pointer"
+                          >
+                            <Star size={12} />
+                            <span>Đặt mặc định</span>
+                          </button>
+                        ) : (
+                          <span className="text-[11px] text-emerald-400 font-semibold flex items-center gap-1">
+                            <CheckCircle2 size={12} /> Đang áp dụng chính
+                          </span>
+                        )}
+
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => openEditPresetModal(preset)}
+                            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 cursor-pointer"
+                            title="Chỉnh sửa"
+                          >
+                            <Pencil size={13} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeletePreset(preset)}
+                            className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-950 hover:text-rose-400 text-slate-400 border border-slate-700 cursor-pointer"
+                            title="Xóa cấu hình"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* WEBHOOK LOGS TAB */}
+      {activeTab === "webhook-logs" && (
+        <div className="card-gradient rounded-2xl border border-slate-700/50 p-6 space-y-4 animate-fade-in">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <h3 className="font-semibold text-slate-100 text-base mb-1 flex items-center gap-2">
+                <RefreshCw size={18} className="text-emerald-400" /> Nhật ký Sự kiện Webhook Shopee (Push Notifications)
+              </h3>
+              <p className="text-xs text-slate-400">
+                Toàn bộ thông báo đẩy, thay đổi trạng thái đơn hàng, sản phẩm hoặc kiểm tra từ Shopee gửi về hệ thống.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={loadWebhookLogs}
+              disabled={loadingLogs}
+              className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 text-xs font-semibold border border-slate-700 flex items-center gap-1.5 cursor-pointer shadow-sm disabled:opacity-50"
+            >
+              <RefreshCw size={14} className={loadingLogs ? "animate-spin text-emerald-400" : ""} />
+              <span>{loadingLogs ? "Đang tải..." : "Tải lại Logs"}</span>
+            </button>
+          </div>
+
+          {webhookLogs.length === 0 ? (
+            <div className="p-10 text-center rounded-2xl bg-slate-900/50 border border-dashed border-slate-800 space-y-2">
+              <RefreshCw size={32} className="mx-auto text-slate-600" />
+              <div className="text-xs text-slate-400">Chưa có bản ghi Webhook nào được nhận từ Shopee.</div>
+              <p className="text-[11px] text-slate-500">
+                Khi Shopee gửi thông báo (đơn hàng mới, test ping, cập nhật trạng thái), dữ liệu sẽ xuất hiện ở đây ngay lập tức.
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto rounded-xl border border-slate-800">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-900/90 text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-800">
+                  <tr>
+                    <th className="py-3 px-4 font-semibold">Thời gian</th>
+                    <th className="py-3 px-4 font-semibold">Event Code</th>
+                    <th className="py-3 px-4 font-semibold">Chủ đề sự kiện (Topic)</th>
+                    <th className="py-3 px-4 font-semibold">Shop ID</th>
+                    <th className="py-3 px-4 font-semibold">IP Gửi</th>
+                    <th className="py-3 px-4 font-semibold text-right">Chi tiết</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60 font-mono">
+                  {webhookLogs.map((log) => (
+                    <tr key={log.id} className="hover:bg-slate-800/40 transition-colors">
+                      <td className="py-3 px-4 text-slate-400 whitespace-nowrap">
+                        {new Date(log.created_at).toLocaleString("vi-VN")}
+                      </td>
+                      <td className="py-3 px-4 font-bold text-orange-400">
+                        Code: {log.code}
+                      </td>
+                      <td className="py-3 px-4 font-bold text-slate-200">
+                        {log.topic || "Unknown Topic"}
+                      </td>
+                      <td className="py-3 px-4 text-slate-300">
+                        {log.shop_id || "N/A"}
+                      </td>
+                      <td className="py-3 px-4 text-slate-500 text-[11px]">
+                        {log.ip || "Direct"}
+                      </td>
+                      <td className="py-3 px-4 text-right">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedLogPayload(log)}
+                          className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 text-[11px] font-sans font-semibold cursor-pointer"
+                        >
+                          Xem Payload
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* MODAL CHI TIẾT WEBHOOK LOG */}
       {selectedLogPayload && (
         <Modal
           open={true}
           onClose={() => setSelectedLogPayload(null)}
-          title={`Chi tiết Webhook: ${selectedLogPayload.topic}`}
+          title={`Chi tiết Webhook: ${selectedLogPayload.topic} (Code: ${selectedLogPayload.code})`}
           size="lg"
         >
           <div className="space-y-4 text-xs">
-            <div className="flex items-center justify-between gap-4 p-3 rounded-xl bg-slate-900 border border-slate-800">
-              <div className="space-y-0.5">
-                <span className="text-[11px] text-slate-400">Thời gian nhận:</span>
-                <p className="font-bold text-slate-200">{new Date(selectedLogPayload.created_at).toLocaleString("vi-VN")}</p>
+            <div className="grid grid-cols-2 gap-3 p-3 rounded-xl bg-slate-900 border border-slate-800 font-mono text-[11px]">
+              <div>
+                <span className="text-slate-500">Thời gian:</span>{" "}
+                <strong className="text-slate-300">{new Date(selectedLogPayload.created_at).toLocaleString("vi-VN")}</strong>
               </div>
-              <div className="space-y-0.5">
-                <span className="text-[11px] text-slate-400">Shop ID:</span>
-                <p className="font-mono font-bold text-brand-400">{selectedLogPayload.shop_id || "N/A"}</p>
+              <div>
+                <span className="text-slate-500">Shop ID:</span>{" "}
+                <strong className="text-slate-300">{selectedLogPayload.shop_id || "N/A"}</strong>
               </div>
-              <div className="space-y-0.5">
-                <span className="text-[11px] text-slate-400">Event Code:</span>
-                <p className="font-mono font-bold text-indigo-400">{selectedLogPayload.code}</p>
+              <div>
+                <span className="text-slate-500">IP Nguồn:</span>{" "}
+                <strong className="text-slate-300">{selectedLogPayload.ip || "N/A"}</strong>
+              </div>
+              <div>
+                <span className="text-slate-500">Code:</span>{" "}
+                <strong className="text-orange-400">{selectedLogPayload.code}</strong>
               </div>
             </div>
 
-            <div className="space-y-1.5">
+            <div>
               <label className="block font-semibold text-slate-300">
                 Dữ liệu nhận (Payload JSON):
               </label>
@@ -1237,6 +1759,314 @@ export function ShopeeShopsPage({ onNavigateToSettings }: ShopeeShopsPageProps) 
             >
               Đóng
             </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* MODAL THÊM / CHỈNH SỬA CẤU HÌNH DANH MỤC LƯU SẴN */}
+      {presetModalOpen && (
+        <Modal
+          open={true}
+          onClose={() => setPresetModalOpen(false)}
+          title={editingPreset.id ? "Chỉnh sửa Cấu hình Danh mục Shopee" : "Tạo Cấu hình Danh mục Shopee lưu sẵn"}
+          size="lg"
+        >
+          <div className="space-y-4 text-xs">
+            {/* Tên Preset */}
+            <div>
+              <label className="block font-semibold text-slate-300 mb-1">
+                Tên Cấu hình Gợi nhớ <span className="text-rose-400 font-bold">*</span>
+              </label>
+              <input
+                type="text"
+                value={editingPreset.name || ""}
+                onChange={(e) => setEditingPreset({ ...editingPreset, name: e.target.value })}
+                placeholder="VD: Áo Thun Nam Unisex Cao Cấp, Áo Polo Nam, Áo Hoodie..."
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-700 bg-slate-900 text-slate-100 outline-none focus:border-purple-500"
+              />
+            </div>
+
+            {/* Chọn Danh Mục Shopee */}
+            <div className="space-y-2 p-3.5 rounded-xl bg-slate-900/90 border border-slate-800">
+              <div className="flex items-center justify-between gap-2">
+                <label className="font-semibold text-slate-200 flex items-center gap-1.5">
+                  <FolderTree size={15} className="text-purple-400" /> Chọn Danh Mục Shopee Thực Tế <span className="text-rose-400 font-bold">*</span>
+                </label>
+                {editingPreset.categoryId ? (
+                  <span className="text-[11px] font-mono text-purple-300 font-bold px-2 py-0.5 rounded-md bg-purple-500/20">
+                    ID đã chọn: #{editingPreset.categoryId}
+                  </span>
+                ) : null}
+              </div>
+
+              {editingPreset.categoryNamePath && (
+                <div className="p-2.5 rounded-lg bg-purple-500/10 border border-purple-500/30 text-purple-200 font-bold text-xs flex items-center gap-2">
+                  <CheckCircle2 size={15} className="text-purple-400 shrink-0" />
+                  <span>{editingPreset.categoryNamePath}</span>
+                </div>
+              )}
+
+              {/* Tìm kiếm danh mục */}
+              <div className="relative">
+                <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  value={modalCatSearch}
+                  onChange={(e) => setModalCatSearch(e.target.value)}
+                  placeholder="Gõ từ khóa để lọc ngành hàng (vd: áo thun, thời trang nam, t-shirt, quần, váy...)"
+                  className="w-full pl-8 pr-3 py-1.5 rounded-lg border border-slate-700 bg-slate-950 text-slate-200 text-xs outline-none focus:border-purple-500"
+                />
+              </div>
+
+              {/* Danh sách danh mục lựa chọn */}
+              <div className="max-h-48 overflow-y-auto rounded-lg border border-slate-800 divide-y divide-slate-800/60 bg-slate-950/60">
+                {shopeeCategories.length === 0 ? (
+                  <div className="p-4 text-center text-slate-400 space-y-2">
+                    <p className="text-[11px]">Chưa có dữ liệu danh mục từ Shopee.</p>
+                    <button
+                      type="button"
+                      onClick={() => loadShopeeCategories()}
+                      disabled={loadingCategories}
+                      className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-700 text-white text-[11px] font-bold inline-flex items-center gap-1 cursor-pointer"
+                    >
+                      <RefreshCw size={12} className={loadingCategories ? "animate-spin" : ""} />
+                      <span>{loadingCategories ? "Đang tải..." : "Kéo danh mục từ Shopee ngay"}</span>
+                    </button>
+                  </div>
+                ) : filteredLeafCategories.length === 0 ? (
+                  <div className="p-3 text-center text-slate-500 text-[11px]">
+                    Không tìm thấy danh mục nào khớp với "{modalCatSearch}".
+                  </div>
+                ) : (
+                  filteredLeafCategories.map((cat) => {
+                    const isSelected = editingPreset.categoryId === cat.categoryId;
+                    const path = getCategoryPath(cat.categoryId, shopeeCategories);
+
+                    return (
+                      <button
+                        key={cat.categoryId}
+                        type="button"
+                        onClick={() => handleCategorySelect(cat)}
+                        className={`w-full text-left p-2.5 transition-colors flex items-center justify-between gap-2 cursor-pointer ${
+                          isSelected
+                            ? "bg-purple-500/20 text-purple-200 font-bold"
+                            : "hover:bg-slate-800 text-slate-300 text-[11px]"
+                        }`}
+                      >
+                        <div className="truncate">
+                          <span className="block font-semibold">{path}</span>
+                          <span className="text-[10px] font-mono text-slate-500">ID: #{cat.categoryId}</span>
+                        </div>
+                        {isSelected && <Check size={14} className="text-purple-400 shrink-0" />}
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+
+            {/* Cấu hình Thuộc tính mặc định (Attributes) */}
+            <div className="space-y-2.5 p-3.5 rounded-xl bg-slate-900/90 border border-slate-800">
+              <div className="flex items-center justify-between">
+                <label className="font-semibold text-slate-200 flex items-center gap-1.5">
+                  <Sliders size={15} className="text-purple-400" /> Thiết lập Thuộc tính Sản phẩm Mặc định
+                </label>
+                {loadingAttributes && (
+                  <span className="text-[11px] text-purple-400 flex items-center gap-1">
+                    <Loader2 size={12} className="animate-spin" /> Đang tải thuộc tính...
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] text-slate-400">
+                Các giá trị này sẽ tự động được gán khi bạn đồng bộ áo thun vào Shopee.
+              </p>
+
+              {/* Dynamic or Custom Attributes Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                {/* Thương hiệu */}
+                <div>
+                  <label className="block font-medium text-slate-300 mb-1">
+                    Thương hiệu (Brand)
+                  </label>
+                  <input
+                    type="text"
+                    value={editingPreset.attributes?.["Thương hiệu"] || "No Brand"}
+                    onChange={(e) =>
+                      setEditingPreset({
+                        ...editingPreset,
+                        attributes: { ...editingPreset.attributes, "Thương hiệu": e.target.value },
+                      })
+                    }
+                    placeholder="No Brand / Tên Brand của bạn"
+                    className="w-full px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-950 text-slate-100 text-xs outline-none focus:border-purple-500"
+                  />
+                </div>
+
+                {/* Chất liệu */}
+                <div>
+                  <label className="block font-medium text-slate-300 mb-1">
+                    Chất liệu (Material)
+                  </label>
+                  <input
+                    type="text"
+                    value={editingPreset.attributes?.["Chất liệu"] || "Cotton 100%"}
+                    onChange={(e) =>
+                      setEditingPreset({
+                        ...editingPreset,
+                        attributes: { ...editingPreset.attributes, "Chất liệu": e.target.value },
+                      })
+                    }
+                    placeholder="VD: Cotton 100%, Cotton Compact 2C..."
+                    className="w-full px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-950 text-slate-100 text-xs outline-none focus:border-purple-500"
+                  />
+                </div>
+
+                {/* Xuất xứ */}
+                <div>
+                  <label className="block font-medium text-slate-300 mb-1">
+                    Xuất xứ (Origin)
+                  </label>
+                  <input
+                    type="text"
+                    value={editingPreset.attributes?.["Xuất xứ"] || "Việt Nam"}
+                    onChange={(e) =>
+                      setEditingPreset({
+                        ...editingPreset,
+                        attributes: { ...editingPreset.attributes, "Xuất xứ": e.target.value },
+                      })
+                    }
+                    placeholder="Việt Nam"
+                    className="w-full px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-950 text-slate-100 text-xs outline-none focus:border-purple-500"
+                  />
+                </div>
+
+                {/* Phong cách */}
+                <div>
+                  <label className="block font-medium text-slate-300 mb-1">
+                    Phong cách (Style)
+                  </label>
+                  <input
+                    type="text"
+                    value={editingPreset.attributes?.["Phong cách"] || "Streetwear / Unisex"}
+                    onChange={(e) =>
+                      setEditingPreset({
+                        ...editingPreset,
+                        attributes: { ...editingPreset.attributes, "Phong cách": e.target.value },
+                      })
+                    }
+                    placeholder="Streetwear, Basic, Hàn Quốc, Cổ điển..."
+                    className="w-full px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-950 text-slate-100 text-xs outline-none focus:border-purple-500"
+                  />
+                </div>
+              </div>
+
+              {/* Shopee Category Attributes Loaded (if available) */}
+              {categoryAttributes.length > 0 && (
+                <div className="pt-2 border-t border-slate-800/80 space-y-2">
+                  <span className="text-[11px] font-bold text-purple-300 block">
+                    Các thuộc tính Shopee bổ sung cho ngành hàng này:
+                  </span>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-40 overflow-y-auto p-1">
+                    {categoryAttributes.slice(0, 8).map((attr) => {
+                      const attrKey = attr.displayAttributeName || attr.originalAttributeName;
+                      const currentValue = editingPreset.attributes?.[attrKey] || "";
+
+                      return (
+                        <div key={attr.attributeId}>
+                          <label className="block text-[11px] font-medium text-slate-400 mb-0.5 truncate" title={attrKey}>
+                            {attrKey} {attr.isMandatory && <span className="text-rose-400 font-bold">*</span>}
+                          </label>
+
+                          {attr.attributeValueList && attr.attributeValueList.length > 0 ? (
+                            <select
+                              value={currentValue}
+                              onChange={(e) =>
+                                setEditingPreset({
+                                  ...editingPreset,
+                                  attributes: {
+                                    ...editingPreset.attributes,
+                                    [attrKey]: e.target.value,
+                                  },
+                                })
+                              }
+                              className="w-full px-2.5 py-1.5 rounded-lg border border-slate-700 bg-slate-950 text-slate-200 text-xs outline-none focus:border-purple-500 cursor-pointer"
+                            >
+                              <option value="">-- Chọn {attrKey} --</option>
+                              {attr.attributeValueList.map((val) => (
+                                <option key={val.valueId} value={val.displayValueName || val.originalValueName}>
+                                  {val.displayValueName || val.originalValueName}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <input
+                              type="text"
+                              value={currentValue}
+                              onChange={(e) =>
+                                setEditingPreset({
+                                  ...editingPreset,
+                                  attributes: {
+                                    ...editingPreset.attributes,
+                                    [attrKey]: e.target.value,
+                                  },
+                                })
+                              }
+                              placeholder={`Nhập ${attrKey}`}
+                              className="w-full px-2.5 py-1.5 rounded-lg border border-slate-700 bg-slate-950 text-slate-200 text-xs outline-none focus:border-purple-500"
+                            />
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Ghi chú */}
+            <div>
+              <label className="block font-semibold text-slate-300 mb-1">
+                Ghi chú cấu hình (Tùy chọn)
+              </label>
+              <input
+                type="text"
+                value={editingPreset.note || ""}
+                onChange={(e) => setEditingPreset({ ...editingPreset, note: e.target.value })}
+                placeholder="VD: Dành cho bộ sưu tập T-shirt mùa hè 2026"
+                className="w-full px-3 py-2 rounded-xl border border-slate-700 bg-slate-900 text-slate-100 outline-none focus:border-purple-500"
+              />
+            </div>
+
+            {/* Mặc định checkbox */}
+            <label className="flex items-center gap-2 cursor-pointer pt-1">
+              <input
+                type="checkbox"
+                checked={editingPreset.isDefault || false}
+                onChange={(e) => setEditingPreset({ ...editingPreset, isDefault: e.target.checked })}
+                className="rounded border-slate-700 text-purple-500 focus:ring-purple-500/30"
+              />
+              <span className="font-semibold text-slate-200">Đặt làm Cấu hình Danh mục Mặc định</span>
+            </label>
+
+            {/* Modal Buttons */}
+            <div className="flex gap-2.5 pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setPresetModalOpen(false)}
+                className="flex-1 py-2.5 rounded-xl border border-slate-700 text-slate-300 font-semibold hover:bg-slate-800 cursor-pointer"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                onClick={handleSavePreset}
+                disabled={savingPreset}
+                className="flex-1 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold shadow-lg shadow-purple-600/20 flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                {savingPreset ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
+                <span>{savingPreset ? "Đang lưu..." : "Lưu Cấu Hình Danh Mục"}</span>
+              </button>
+            </div>
           </div>
         </Modal>
       )}
