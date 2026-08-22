@@ -702,3 +702,138 @@ export async function testShopeeShopConnection(shopIdOrInternalId: string): Prom
     };
   }
 }
+
+export interface ShopeeLogisticsChannel {
+  channelId: number;
+  channelName: string;
+  enabled: boolean;
+  codEnabled: boolean;
+  forceEnable: boolean;
+  feeType?: string;
+  maxWeight: number;
+  minWeight: number;
+  maxDimension: {
+    length: number;
+    width: number;
+    height: number;
+    unit: string;
+  };
+  maskChannelId?: number;
+}
+
+export interface ShopeeDefaultLogisticsConfig {
+  defaultWeightKg: number; // vd: 0.2 kg (200g)
+  defaultLengthCm: number; // vd: 25 cm
+  defaultWidthCm: number;  // vd: 20 cm
+  defaultHeightCm: number; // vd: 3 cm
+  daysToShip: number;      // 2 ngày
+  isPreOrder: boolean;     // Hàng đặt trước
+  selectedChannelIds: number[]; // ID các kênh bật mặc định
+  coverShippingFeeChannelIds: number[]; // ID các kênh người bán chịu phí ship
+}
+
+export const DEFAULT_LOGISTICS_CONFIG: ShopeeDefaultLogisticsConfig = {
+  defaultWeightKg: 0.2,
+  defaultLengthCm: 25,
+  defaultWidthCm: 20,
+  defaultHeightCm: 3,
+  daysToShip: 2,
+  isPreOrder: false,
+  selectedChannelIds: [50021, 50011, 50012, 50018, 50015],
+  coverShippingFeeChannelIds: [],
+};
+
+const STORAGE_KEY_SHOPEE_LOGISTICS = "sanpham_shopee_default_logistics_v1";
+
+/**
+ * Kéo danh sách kênh vận chuyển thực tế từ Shopee Open API
+ */
+export async function fetchShopeeLogisticsChannels(shopId?: string): Promise<{
+  channels: ShopeeLogisticsChannel[];
+  shopId: string;
+}> {
+  try {
+    const proxyRes = await fetch("/api/shopee/proxy?action=get_logistics", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ shop_id: shopId }),
+    });
+
+    const data = await proxyRes.json();
+    if (proxyRes.ok && data.channels) {
+      return {
+        channels: data.channels,
+        shopId: data.shopId,
+      };
+    }
+    throw new Error(data.error || "Không thể tải danh sách kênh vận chuyển");
+  } catch (err: any) {
+    console.error("Lỗi kéo logistics channels:", err);
+    throw err;
+  }
+}
+
+/**
+ * Đọc cấu hình vận chuyển mặc định (Đọc nhanh từ LocalStorage)
+ */
+export function getShopeeDefaultLogisticsConfig(): ShopeeDefaultLogisticsConfig {
+  if (typeof window === "undefined") return DEFAULT_LOGISTICS_CONFIG;
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_SHOPEE_LOGISTICS);
+    if (!raw) return DEFAULT_LOGISTICS_CONFIG;
+    return { ...DEFAULT_LOGISTICS_CONFIG, ...JSON.parse(raw) };
+  } catch {
+    return DEFAULT_LOGISTICS_CONFIG;
+  }
+}
+
+/**
+ * Lấy cấu hình vận chuyển mặc định từ Supabase
+ */
+export async function fetchShopeeDefaultLogisticsConfig(): Promise<ShopeeDefaultLogisticsConfig> {
+  const local = getShopeeDefaultLogisticsConfig();
+  try {
+    const { data } = await supabase
+      .from("shopee_app_configs")
+      .select("logistics_config")
+      .eq("id", 1)
+      .maybeSingle();
+
+    if (data?.logistics_config) {
+      const fetched = { ...DEFAULT_LOGISTICS_CONFIG, ...data.logistics_config };
+      if (typeof window !== "undefined") {
+        localStorage.setItem(STORAGE_KEY_SHOPEE_LOGISTICS, JSON.stringify(fetched));
+      }
+      return fetched;
+    }
+    return local;
+  } catch (err) {
+    console.warn("Lỗi tải logistics config từ Supabase:", err);
+    return local;
+  }
+}
+
+/**
+ * Lưu cấu hình vận chuyển mặc định vào Supabase và LocalStorage
+ */
+export async function saveShopeeDefaultLogisticsConfig(
+  config: Partial<ShopeeDefaultLogisticsConfig>
+): Promise<ShopeeDefaultLogisticsConfig> {
+  const current = getShopeeDefaultLogisticsConfig();
+  const updated: ShopeeDefaultLogisticsConfig = { ...current, ...config };
+
+  if (typeof window !== "undefined") {
+    localStorage.setItem(STORAGE_KEY_SHOPEE_LOGISTICS, JSON.stringify(updated));
+  }
+
+  try {
+    await supabase.from("shopee_app_configs").update({
+      logistics_config: updated,
+      updated_at: new Date().toISOString(),
+    }).eq("id", 1);
+  } catch (err) {
+    console.warn("Lỗi lưu logistics config vào Supabase:", err);
+  }
+
+  return updated;
+}

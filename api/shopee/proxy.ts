@@ -247,6 +247,69 @@ export default async function handler(req: any, res: any) {
       });
     }
 
+    // 4. ACTION: KÉO DANH SÁCH KÊNH VẬN CHUYỂN (GET LOGISTICS CHANNEL LIST)
+    if (action === "get_logistics") {
+      let shopId = String(body.shop_id || body.shopId || req.query.shop_id || req.query.shopId || "").trim();
+      let accessToken = String(body.access_token || body.accessToken || "").trim();
+
+      if (!shopId || !accessToken) {
+        // Tự động tìm token từ database nếu chỉ truyền shop_id hoặc lấy shop mặc định
+        const { data: shops } = await supabase.from("shopee_shops").select("*");
+        const shop = shopId
+          ? shops?.find((s: any) => String(s.shop_id) === shopId)
+          : shops?.find((s: any) => s.is_default) || shops?.[0];
+
+        if (shop) {
+          shopId = String(shop.shop_id);
+          accessToken = shop.access_token;
+        }
+      }
+
+      if (!shopId || !accessToken) {
+        return res.status(400).json({ error: "Không tìm thấy gian hàng Shopee nào có token để kéo logistics." });
+      }
+
+      const apiPath = "/api/v2/logistics/get_channel_list";
+      const timestamp = Math.floor(Date.now() / 1000);
+      const sign = generateShopeeSignature(partnerId, partnerKey, apiPath, timestamp, accessToken, shopId);
+      const url = `${host}${apiPath}?partner_id=${Number(partnerId)}&timestamp=${timestamp}&access_token=${accessToken}&shop_id=${Number(shopId)}&sign=${sign}`;
+
+      const logRes = await fetch(url);
+      const logData = await logRes.json();
+
+      if (logData.error) {
+        return res.status(400).json({
+          error: logData.message || logData.error,
+          detail: logData,
+        });
+      }
+
+      const rawList = logData.response?.logistics_channel_list || [];
+      const channels = rawList.map((ch: any) => ({
+        channelId: ch.logistics_channel_id,
+        channelName: ch.logistics_channel_name,
+        enabled: Boolean(ch.enabled),
+        codEnabled: Boolean(ch.cod_enabled),
+        forceEnable: Boolean(ch.force_enable),
+        feeType: ch.fee_type,
+        maxWeight: ch.weight_limit?.item_max_weight || 0,
+        minWeight: ch.weight_limit?.item_min_weight || 0,
+        maxDimension: {
+          length: ch.item_max_dimension?.length || 0,
+          width: ch.item_max_dimension?.width || 0,
+          height: ch.item_max_dimension?.height || 0,
+          unit: ch.item_max_dimension?.unit || "cm",
+        },
+        maskChannelId: ch.mask_channel_id,
+      }));
+
+      return res.status(200).json({
+        success: true,
+        shopId,
+        channels,
+      });
+    }
+
     return res.status(400).json({ error: `Unknown action: ${action}` });
   } catch (err: any) {
     console.error("Shopee Proxy Error:", err);

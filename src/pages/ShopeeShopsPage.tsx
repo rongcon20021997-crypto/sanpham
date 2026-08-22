@@ -13,8 +13,14 @@ import {
   exchangeShopeeAuthCode,
   refreshShopeeShopToken,
   testShopeeShopConnection,
+  fetchShopeeLogisticsChannels,
+  getShopeeDefaultLogisticsConfig,
+  fetchShopeeDefaultLogisticsConfig,
+  saveShopeeDefaultLogisticsConfig,
   type ShopeeAppConfig,
   type ShopeeShop,
+  type ShopeeLogisticsChannel,
+  type ShopeeDefaultLogisticsConfig,
 } from "@/lib/shopee";
 import {
   Store,
@@ -38,6 +44,10 @@ import {
   ShoppingBag,
   Eye,
   EyeOff,
+  Truck,
+  Box,
+  Package,
+  Info,
 } from "lucide-react";
 
 import { supabase } from "@/lib/supabase";
@@ -60,7 +70,14 @@ export function ShopeeShopsPage({ onNavigateToSettings }: ShopeeShopsPageProps) 
   const [appConfig, setAppConfig] = useState<ShopeeAppConfig>(getShopeeAppConfig());
   const [shops, setShops] = useState<ShopeeShop[]>(getShopeeShops());
   const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<"shops" | "webhook-logs">("shops");
+  const [activeTab, setActiveTab] = useState<"shops" | "logistics" | "webhook-logs">("shops");
+
+  // Logistics state
+  const [logisticsConfig, setLogisticsConfig] = useState<ShopeeDefaultLogisticsConfig>(getShopeeDefaultLogisticsConfig());
+  const [logisticsChannels, setLogisticsChannels] = useState<ShopeeLogisticsChannel[]>([]);
+  const [loadingLogistics, setLoadingLogistics] = useState(false);
+  const [savingLogistics, setSavingLogistics] = useState(false);
+  const [selectedLogisticsShopId, setSelectedLogisticsShopId] = useState<string>("");
 
   // Webhook logs state
   const [webhookLogs, setWebhookLogs] = useState<WebhookLog[]>([]);
@@ -101,16 +118,47 @@ export function ShopeeShopsPage({ onNavigateToSettings }: ShopeeShopsPageProps) 
   async function loadDataFromSupabase() {
     setLoading(true);
     try {
-      const [cfg, shps] = await Promise.all([
+      const [cfg, shps, logCfg] = await Promise.all([
         fetchShopeeAppConfig(),
         fetchShopeeShops(),
+        fetchShopeeDefaultLogisticsConfig(),
       ]);
       setAppConfig(cfg);
       setShops(shps);
+      setLogisticsConfig(logCfg);
+      if (shps.length > 0 && !selectedLogisticsShopId) {
+        const def = shps.find((s) => s.isDefault) || shps[0];
+        setSelectedLogisticsShopId(def.shopId);
+      }
     } catch (e) {
       console.warn("Lỗi tải Shopee từ Supabase:", e);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadLogisticsChannels(shopId?: string) {
+    setLoadingLogistics(true);
+    try {
+      const res = await fetchShopeeLogisticsChannels(shopId || selectedLogisticsShopId);
+      setLogisticsChannels(res.channels);
+      showToast(`🚚 Đã tải thành công ${res.channels.length} kênh vận chuyển từ Shopee!`);
+    } catch (err: any) {
+      alert(`Lỗi kéo kênh vận chuyển: ${err.message}`);
+    } finally {
+      setLoadingLogistics(false);
+    }
+  }
+
+  async function handleSaveLogistics() {
+    setSavingLogistics(true);
+    try {
+      await saveShopeeDefaultLogisticsConfig(logisticsConfig);
+      showToast("💾 Đã lưu cấu hình vận chuyển mặc định vào Supabase!");
+    } catch (err: any) {
+      alert(`Lỗi lưu cấu hình: ${err.message}`);
+    } finally {
+      setSavingLogistics(false);
     }
   }
 
@@ -365,11 +413,11 @@ export function ShopeeShopsPage({ onNavigateToSettings }: ShopeeShopsPageProps) 
       </div>
 
       {/* Tab Navigation */}
-      <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
+      <div className="flex items-center gap-2 border-b border-slate-800 pb-2 overflow-x-auto">
         <button
           type="button"
           onClick={() => setActiveTab("shops")}
-          className={`px-4 py-2 rounded-xl font-bold text-xs flex items-center gap-2 transition-all cursor-pointer ${
+          className={`px-4 py-2 rounded-xl font-bold text-xs flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
             activeTab === "shops"
               ? "bg-brand-500 text-white shadow-lg shadow-brand-500/20"
               : "bg-slate-900 text-slate-400 hover:text-slate-200"
@@ -382,19 +430,402 @@ export function ShopeeShopsPage({ onNavigateToSettings }: ShopeeShopsPageProps) 
         <button
           type="button"
           onClick={() => {
+            setActiveTab("logistics");
+            if (logisticsChannels.length === 0) {
+              loadLogisticsChannels();
+            }
+          }}
+          className={`px-4 py-2 rounded-xl font-bold text-xs flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
+            activeTab === "logistics"
+              ? "bg-brand-500 text-white shadow-lg shadow-brand-500/20"
+              : "bg-slate-900 text-slate-400 hover:text-slate-200"
+          }`}
+        >
+          <Truck size={15} className="text-orange-400" />
+          <span>Cấu hình Vận chuyển Mặc định (Logistics)</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
             setActiveTab("webhook-logs");
             loadWebhookLogs();
           }}
-          className={`px-4 py-2 rounded-xl font-bold text-xs flex items-center gap-2 transition-all cursor-pointer ${
+          className={`px-4 py-2 rounded-xl font-bold text-xs flex items-center gap-2 transition-all shrink-0 cursor-pointer ${
             activeTab === "webhook-logs"
               ? "bg-brand-500 text-white shadow-lg shadow-brand-500/20"
               : "bg-slate-900 text-slate-400 hover:text-slate-200"
           }`}
         >
           <RefreshCw size={14} className={loadingLogs ? "animate-spin text-emerald-400" : "text-emerald-400"} />
-          <span>Nhật ký Webhook nhận từ Shopee ({webhookLogs.length})</span>
+          <span>Nhật ký Webhook ({webhookLogs.length})</span>
         </button>
       </div>
+
+      {/* LOGISTICS CONFIGURATION TAB */}
+      {activeTab === "logistics" && (
+        <div className="space-y-6 animate-fade-in">
+          {/* Package & Shipping Presets Card */}
+          <div className="card-gradient rounded-2xl border border-slate-700/50 p-6 space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <h3 className="font-semibold text-slate-100 text-base mb-1 flex items-center gap-2">
+                  <Box size={18} className="text-orange-400" /> Thông số Đóng Gói & Chuẩn Bị Hàng Mặc Định
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Cấu hình sẵn cân nặng, kích thước hộp đóng gói và thời gian giao hàng. Khi đăng hoặc đồng bộ sản phẩm sẽ tự động áp dụng thông số này.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <select
+                  value={selectedLogisticsShopId}
+                  onChange={(e) => {
+                    setSelectedLogisticsShopId(e.target.value);
+                    loadLogisticsChannels(e.target.value);
+                  }}
+                  className="px-3 py-1.5 rounded-xl border border-slate-700 bg-slate-900 text-slate-200 text-xs outline-none focus:border-brand-500 cursor-pointer"
+                >
+                  {shops.map((s) => (
+                    <option key={s.id} value={s.shopId}>
+                      {s.shopName} ({s.shopId})
+                    </option>
+                  ))}
+                </select>
+
+                <button
+                  type="button"
+                  onClick={() => loadLogisticsChannels(selectedLogisticsShopId)}
+                  disabled={loadingLogistics}
+                  className="px-3.5 py-1.5 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-sm disabled:opacity-50"
+                >
+                  <RefreshCw size={13} className={loadingLogistics ? "animate-spin" : ""} />
+                  <span>{loadingLogistics ? "Đang kéo..." : "Đồng bộ Kênh Shopee"}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Form Kích thước & Trọng lượng */}
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 pt-2">
+              {/* Trọng lượng */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center justify-between">
+                  <span>Cân nặng đóng gói (Kg) *</span>
+                  <span className="text-[11px] text-orange-400 font-bold">
+                    {(Number(logisticsConfig.defaultWeightKg) * 1000).toFixed(0)} gram
+                  </span>
+                </label>
+                <input
+                  type="number"
+                  step="0.05"
+                  min="0.01"
+                  max="50"
+                  value={logisticsConfig.defaultWeightKg}
+                  onChange={(e) =>
+                    setLogisticsConfig({ ...logisticsConfig, defaultWeightKg: parseFloat(e.target.value) || 0.2 })
+                  }
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-700/60 bg-slate-800/80 text-slate-100 text-xs font-mono outline-none focus:border-brand-500"
+                />
+                {/* Gợi ý nhanh */}
+                <div className="flex gap-1.5 mt-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => setLogisticsConfig({ ...logisticsConfig, defaultWeightKg: 0.2 })}
+                    className="text-[10px] px-2 py-0.5 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 cursor-pointer"
+                  >
+                    👕 Áo thun (200g)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setLogisticsConfig({ ...logisticsConfig, defaultWeightKg: 0.35 })}
+                    className="text-[10px] px-2 py-0.5 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 cursor-pointer"
+                  >
+                    👖 Quần / Polo (350g)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setLogisticsConfig({ ...logisticsConfig, defaultWeightKg: 0.5 })}
+                    className="text-[10px] px-2 py-0.5 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 cursor-pointer"
+                  >
+                    🧥 Hoodie (500g)
+                  </button>
+                </div>
+              </div>
+
+              {/* Chiều Dài */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                  Chiều Dài (Length cm) *
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  max="200"
+                  value={logisticsConfig.defaultLengthCm}
+                  onChange={(e) =>
+                    setLogisticsConfig({ ...logisticsConfig, defaultLengthCm: parseInt(e.target.value) || 25 })
+                  }
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-700/60 bg-slate-800/80 text-slate-100 text-xs font-mono outline-none focus:border-brand-500"
+                />
+                <span className="text-[11px] text-slate-500 mt-1 block">Khuyên dùng: 25 cm</span>
+              </div>
+
+              {/* Chiều Rộng */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                  Chiều Rộng (Width cm) *
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  max="200"
+                  value={logisticsConfig.defaultWidthCm}
+                  onChange={(e) =>
+                    setLogisticsConfig({ ...logisticsConfig, defaultWidthCm: parseInt(e.target.value) || 20 })
+                  }
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-700/60 bg-slate-800/80 text-slate-100 text-xs font-mono outline-none focus:border-brand-500"
+                />
+                <span className="text-[11px] text-slate-500 mt-1 block">Khuyên dùng: 20 cm</span>
+              </div>
+
+              {/* Chiều Cao */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                  Chiều Cao (Height cm) *
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  max="200"
+                  value={logisticsConfig.defaultHeightCm}
+                  onChange={(e) =>
+                    setLogisticsConfig({ ...logisticsConfig, defaultHeightCm: parseInt(e.target.value) || 3 })
+                  }
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-700/60 bg-slate-800/80 text-slate-100 text-xs font-mono outline-none focus:border-brand-500"
+                />
+                <span className="text-[11px] text-slate-500 mt-1 block">Khuyên dùng: 3 cm</span>
+              </div>
+            </div>
+
+            {/* Thời gian chuẩn bị hàng (Days to Ship) */}
+            <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-3">
+              <label className="block font-bold text-xs text-slate-200">
+                Thời gian chuẩn bị hàng (Days To Ship - DTS):
+              </label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <label
+                  className={`p-3.5 rounded-xl border flex items-start gap-3 cursor-pointer transition-all ${
+                    !logisticsConfig.isPreOrder
+                      ? "bg-brand-500/10 border-brand-500/40 text-slate-100"
+                      : "bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700"
+                  }`}
+                  onClick={() => setLogisticsConfig({ ...logisticsConfig, isPreOrder: false, daysToShip: 2 })}
+                >
+                  <input
+                    type="radio"
+                    name="dts"
+                    checked={!logisticsConfig.isPreOrder}
+                    onChange={() => setLogisticsConfig({ ...logisticsConfig, isPreOrder: false, daysToShip: 2 })}
+                    className="mt-1 text-brand-500"
+                  />
+                  <div>
+                    <h4 className="font-bold text-xs text-slate-100">Hàng có sẵn (Giao trong 2 ngày)</h4>
+                    <p className="text-[11px] text-slate-400">
+                      Chuẩn bị và giao cho đơn vị vận chuyển trong vòng 2 ngày làm việc.
+                    </p>
+                  </div>
+                </label>
+
+                <label
+                  className={`p-3.5 rounded-xl border flex items-start gap-3 cursor-pointer transition-all ${
+                    logisticsConfig.isPreOrder
+                      ? "bg-brand-500/10 border-brand-500/40 text-slate-100"
+                      : "bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700"
+                  }`}
+                  onClick={() => setLogisticsConfig({ ...logisticsConfig, isPreOrder: true, daysToShip: 7 })}
+                >
+                  <input
+                    type="radio"
+                    name="dts"
+                    checked={logisticsConfig.isPreOrder}
+                    onChange={() => setLogisticsConfig({ ...logisticsConfig, isPreOrder: true, daysToShip: 7 })}
+                    className="mt-1 text-brand-500"
+                  />
+                  <div className="w-full">
+                    <div className="flex items-center justify-between">
+                      <h4 className="font-bold text-xs text-slate-100">Hàng đặt trước (Pre-Order)</h4>
+                      {logisticsConfig.isPreOrder && (
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="number"
+                            min="7"
+                            max="15"
+                            value={logisticsConfig.daysToShip}
+                            onChange={(e) =>
+                              setLogisticsConfig({
+                                ...logisticsConfig,
+                                daysToShip: Math.max(7, parseInt(e.target.value) || 7),
+                              })
+                            }
+                            className="w-14 px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-slate-100 text-xs font-mono"
+                          />
+                          <span className="text-[11px] text-slate-300">ngày</span>
+                        </div>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-slate-400 mt-0.5">
+                      Dành cho áo thun in theo yêu cầu (Shopee quy định từ 7 đến 15 ngày).
+                    </p>
+                  </div>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          {/* Logistics Channels Selection Card */}
+          <div className="card-gradient rounded-2xl border border-slate-700/50 p-6 space-y-4">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <h3 className="font-semibold text-slate-100 text-base mb-1 flex items-center gap-2">
+                  <Truck size={18} className="text-emerald-400" /> Các Kênh Vận Chuyển Áp Dụng Cho Sản Phẩm
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Chọn các đơn vị vận chuyển sẽ được kích hoạt mặc định khi bạn tạo hoặc đồng bộ áo thun lên Shopee.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const allIds = (logisticsChannels.length > 0 ? logisticsChannels : [
+                      { channelId: 50021 }, { channelId: 50011 }, { channelId: 50012 }, { channelId: 50018 }, { channelId: 50015 }
+                    ]).map((c) => c.channelId);
+                    setLogisticsConfig({ ...logisticsConfig, selectedChannelIds: allIds });
+                  }}
+                  className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold border border-slate-700 cursor-pointer"
+                >
+                  Chọn tất cả
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLogisticsConfig({ ...logisticsConfig, selectedChannelIds: [] })}
+                  className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold border border-slate-700 cursor-pointer"
+                >
+                  Bỏ chọn hết
+                </button>
+              </div>
+            </div>
+
+            {/* Channels Grid / List */}
+            {logisticsChannels.length === 0 ? (
+              <div className="p-8 text-center rounded-2xl bg-slate-900/50 border border-dashed border-slate-800 space-y-3">
+                <Truck size={36} className="mx-auto text-slate-600" />
+                <div className="text-xs text-slate-400">
+                  Bấm nút bên dưới để kéo danh sách các kênh vận chuyển thực tế đang mở trên gian hàng Shopee của bạn.
+                </div>
+                <button
+                  type="button"
+                  onClick={() => loadLogisticsChannels()}
+                  disabled={loadingLogistics}
+                  className="px-4 py-2 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-lg shadow-orange-500/20 cursor-pointer"
+                >
+                  <RefreshCw size={14} className={loadingLogistics ? "animate-spin" : ""} />
+                  <span>Kéo danh sách Kênh Vận Chuyển từ Shopee</span>
+                </button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {logisticsChannels.map((channel) => {
+                  const isSelected = logisticsConfig.selectedChannelIds.includes(channel.channelId);
+                  const isCoverFee = logisticsConfig.coverShippingFeeChannelIds.includes(channel.channelId);
+
+                  return (
+                    <div
+                      key={channel.channelId}
+                      className={`p-4 rounded-2xl border transition-all space-y-2.5 ${
+                        isSelected
+                          ? "bg-slate-900/90 border-emerald-500/40 shadow-sm"
+                          : "bg-slate-900/40 border-slate-800 opacity-60 hover:opacity-100"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <label className="flex items-center gap-2.5 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={(e) => {
+                              const next = e.target.checked
+                                ? [...logisticsConfig.selectedChannelIds, channel.channelId]
+                                : logisticsConfig.selectedChannelIds.filter((id) => id !== channel.channelId);
+                              setLogisticsConfig({ ...logisticsConfig, selectedChannelIds: next });
+                            }}
+                            className="rounded border-slate-700 text-emerald-500 focus:ring-emerald-500/30 w-4 h-4 cursor-pointer"
+                          />
+                          <div>
+                            <h4 className="font-bold text-xs text-slate-100">{channel.channelName}</h4>
+                            <span className="text-[10px] font-mono text-slate-400">ID: {channel.channelId}</span>
+                          </div>
+                        </label>
+
+                        {channel.codEnabled && (
+                          <span className="px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 font-bold text-[10px]">
+                            COD
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-[11px]">
+                        <span className="text-slate-400">
+                          Tối đa: <strong className="text-slate-300">{channel.maxWeight}kg</strong>
+                        </span>
+
+                        <label
+                          className={`flex items-center gap-1.5 cursor-pointer text-[10px] ${
+                            !isSelected ? "pointer-events-none opacity-40" : ""
+                          }`}
+                          title="Người bán sẽ trả toàn bộ phí vận chuyển thay cho khách mua"
+                        >
+                          <input
+                            type="checkbox"
+                            disabled={!isSelected}
+                            checked={isCoverFee}
+                            onChange={(e) => {
+                              const next = e.target.checked
+                                ? [...logisticsConfig.coverShippingFeeChannelIds, channel.channelId]
+                                : logisticsConfig.coverShippingFeeChannelIds.filter((id) => id !== channel.channelId);
+                              setLogisticsConfig({ ...logisticsConfig, coverShippingFeeChannelIds: next });
+                            }}
+                            className="rounded border-slate-700 text-amber-500 focus:ring-amber-500/30"
+                          />
+                          <span className="text-slate-400 hover:text-amber-300">Bao cước ship</span>
+                        </label>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Save Actions */}
+            <div className="pt-4 border-t border-slate-800 flex items-center justify-between">
+              <span className="text-xs text-slate-400">
+                Đã chọn: <strong className="text-emerald-400 font-mono">{logisticsConfig.selectedChannelIds.length}</strong> đơn vị vận chuyển
+              </span>
+
+              <button
+                type="button"
+                onClick={handleSaveLogistics}
+                disabled={savingLogistics}
+                className="px-6 py-2.5 rounded-xl bg-brand-500 hover:bg-brand-600 text-white font-bold text-xs shadow-lg shadow-brand-500/20 flex items-center gap-2 transition-all cursor-pointer disabled:opacity-50"
+              >
+                {savingLogistics ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
+                <span>{savingLogistics ? "Đang lưu..." : "Lưu Cấu Hình Vận Chuyển Mặc Định"}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* WEBHOOK LOGS TAB */}
       {activeTab === "webhook-logs" && (
