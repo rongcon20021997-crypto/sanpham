@@ -876,17 +876,37 @@ function ShopeeTab() {
 
         {/* Redirect URL */}
         <div>
-          <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center justify-between">
-            <span>Redirect URL (URL chuyển hướng khi ủy quyền)</span>
-            <span className="text-[11px] font-normal text-slate-400">Cấu hình khớp trên Shopee Console</span>
-          </label>
-          <input
-            type="text"
-            value={appConfig.redirectUrl}
-            onChange={(e) => setAppConfig({ ...appConfig, redirectUrl: e.target.value.trim() })}
-            placeholder="https://yourdomain.com/shopee-callback"
-            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-700/60 bg-slate-800/80 text-slate-100 text-xs font-mono outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500"
-          />
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="text-xs font-semibold text-slate-300">
+              Redirect URL (URL chuyển hướng khi ủy quyền)
+            </label>
+            <button
+              type="button"
+              onClick={() =>
+                setAppConfig({
+                  ...appConfig,
+                  redirectUrl: typeof window !== "undefined" ? window.location.origin : "",
+                })
+              }
+              className="text-[11px] text-brand-400 hover:text-brand-300 hover:underline flex items-center gap-1 cursor-pointer"
+              title="Điền URL của môi trường hiện tại"
+            >
+              <Globe size={12} />
+              <span>Lấy URL hiện tại ({typeof window !== "undefined" ? window.location.origin : "localhost"})</span>
+            </button>
+          </div>
+          <div className="space-y-1.5">
+            <input
+              type="text"
+              value={appConfig.redirectUrl}
+              onChange={(e) => setAppConfig({ ...appConfig, redirectUrl: e.target.value.trim() })}
+              placeholder={typeof window !== "undefined" ? `${window.location.origin} (Tự động phát hiện)` : "Tự động phát hiện theo môi trường"}
+              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-700/60 bg-slate-800/80 text-slate-100 text-xs font-mono outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500"
+            />
+            <p className="text-[11px] text-slate-400">
+              💡 <em>Nếu để trống, hệ thống sẽ tự động bắt theo địa chỉ bạn đang truy cập (Localhost khi chạy máy cá nhân hoặc Tên miền khi chạy trên Server).</em>
+            </p>
+          </div>
         </div>
 
         {/* Actions */}

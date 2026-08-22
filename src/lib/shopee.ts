@@ -30,11 +30,18 @@ export interface ShopeeShop {
 const STORAGE_KEY_SHOPEE_APP = "sanpham_shopee_app_config_v2";
 const STORAGE_KEY_SHOPEE_SHOPS = "sanpham_shopee_shops_v2";
 
+export function getCurrentRedirectUrl(): string {
+  if (typeof window !== "undefined" && window.location.origin) {
+    return window.location.origin;
+  }
+  return "http://localhost:5173";
+}
+
 export const DEFAULT_SHOPEE_APP_CONFIG: ShopeeAppConfig = {
   partnerId: "",
   partnerKey: "",
   environment: "live",
-  redirectUrl: typeof window !== "undefined" ? `${window.location.origin}/shopee-callback` : "https://localhost:5173/shopee-callback",
+  redirectUrl: "",
 };
 
 /**
@@ -384,7 +391,7 @@ export async function generateShopeeAuthUrl(customRedirect?: string): Promise<st
   const partnerKey = appConfig.partnerKey.trim();
   const apiPath = "/api/v2/shop/auth_partner";
   const timestamp = Math.floor(Date.now() / 1000);
-  const redirectUrl = (customRedirect || appConfig.redirectUrl || window.location.origin).trim();
+  const redirectUrl = (customRedirect || appConfig.redirectUrl || getCurrentRedirectUrl()).trim();
 
   const sign = await generateShopeeSignature(partnerId, partnerKey, apiPath, timestamp);
   const host = getShopeeBaseUrl(appConfig.environment);
