@@ -3,7 +3,9 @@ import { PageHeader } from "@/components/PageParts";
 import { Modal } from "@/components/Modal";
 import {
   getShopeeAppConfig,
+  fetchShopeeAppConfig,
   getShopeeShops,
+  fetchShopeeShops,
   saveShopeeShop,
   deleteShopeeShop,
   setDefaultShopeeShop,
@@ -45,6 +47,7 @@ interface ShopeeShopsPageProps {
 export function ShopeeShopsPage({ onNavigateToSettings }: ShopeeShopsPageProps) {
   const [appConfig, setAppConfig] = useState<ShopeeAppConfig>(getShopeeAppConfig());
   const [shops, setShops] = useState<ShopeeShop[]>(getShopeeShops());
+  const [loading, setLoading] = useState(false);
 
   // Auth link & code exchange
   const [authUrl, setAuthUrl] = useState("");
@@ -77,9 +80,28 @@ export function ShopeeShopsPage({ onNavigateToSettings }: ShopeeShopsPageProps) 
     setTimeout(() => setToastMessage(null), 3000);
   }
 
-  function refreshShopList() {
-    setShops(getShopeeShops());
-    setAppConfig(getShopeeAppConfig());
+  async function loadDataFromSupabase() {
+    setLoading(true);
+    try {
+      const [cfg, shps] = await Promise.all([
+        fetchShopeeAppConfig(),
+        fetchShopeeShops(),
+      ]);
+      setAppConfig(cfg);
+      setShops(shps);
+    } catch (e) {
+      console.warn("Lỗi tải Shopee từ Supabase:", e);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadDataFromSupabase();
+  }, []);
+
+  async function refreshShopList() {
+    await loadDataFromSupabase();
   }
 
   const isAppConfigured = Boolean(appConfig.partnerId && appConfig.partnerKey);
@@ -114,7 +136,7 @@ export function ShopeeShopsPage({ onNavigateToSettings }: ShopeeShopsPageProps) 
         exchangeShopId.trim(),
         exchangeShopName.trim() || undefined
       );
-      refreshShopList();
+      await refreshShopList();
       setExchangeCode("");
       setExchangeShopId("");
       setExchangeShopName("");
@@ -131,7 +153,7 @@ export function ShopeeShopsPage({ onNavigateToSettings }: ShopeeShopsPageProps) 
     const res = await testShopeeShopConnection(shop.id);
     setShopTestResults((prev) => ({ ...prev, [shop.id]: res }));
     setLoadingActionShopId(null);
-    refreshShopList();
+    await refreshShopList();
     if (res.success) {
       showToast(`✅ Gian hàng "${shop.shopName}" hoạt động bình thường!`);
     }
@@ -141,7 +163,7 @@ export function ShopeeShopsPage({ onNavigateToSettings }: ShopeeShopsPageProps) 
     setLoadingActionShopId(shop.id);
     try {
       await refreshShopeeShopToken(shop.id);
-      refreshShopList();
+      await refreshShopList();
       showToast(`✅ Đã làm mới Access Token cho "${shop.shopName}"!`);
     } catch (err) {
       alert(`Lỗi làm mới token: ${(err as Error).message}`);
@@ -150,20 +172,20 @@ export function ShopeeShopsPage({ onNavigateToSettings }: ShopeeShopsPageProps) 
     }
   }
 
-  function handleSetDefaultShop(shop: ShopeeShop) {
-    setDefaultShopeeShop(shop.id);
-    refreshShopList();
+  async function handleSetDefaultShop(shop: ShopeeShop) {
+    await setDefaultShopeeShop(shop.id);
+    await refreshShopList();
     showToast(`⭐ Đã đặt "${shop.shopName}" làm gian hàng chính!`);
   }
 
-  function handleDeleteShop(shop: ShopeeShop) {
+  async function handleDeleteShop(shop: ShopeeShop) {
     if (
       window.confirm(
         `Bạn có chắc chắn muốn ngắt kết nối và xóa gian hàng "${shop.shopName}" (ID: ${shop.shopId}) khỏi hệ thống?`
       )
     ) {
-      deleteShopeeShop(shop.id);
-      refreshShopList();
+      await deleteShopeeShop(shop.id);
+      await refreshShopList();
       showToast(`Đã xóa gian hàng "${shop.shopName}".`);
     }
   }
@@ -186,12 +208,12 @@ export function ShopeeShopsPage({ onNavigateToSettings }: ShopeeShopsPageProps) 
     setShopModalOpen(true);
   }
 
-  function handleSaveShopModal() {
+  async function handleSaveShopModal() {
     if (!editingShop.shopId?.trim()) {
       alert("Vui lòng nhập Shop ID (Mã gian hàng Shopee).");
       return;
     }
-    saveShopeeShop({
+    await saveShopeeShop({
       id: editingShop.id,
       shopId: editingShop.shopId.trim(),
       shopName: editingShop.shopName?.trim() || `Gian hàng ${editingShop.shopId}`,
@@ -202,8 +224,8 @@ export function ShopeeShopsPage({ onNavigateToSettings }: ShopeeShopsPageProps) 
       note: editingShop.note || "",
     });
     setShopModalOpen(false);
-    refreshShopList();
-    showToast("💾 Đã lưu thông tin gian hàng!");
+    await refreshShopList();
+    showToast("💾 Đã lưu thông tin gian hàng vào Supabase!");
   }
 
   const totalShops = shops.length;

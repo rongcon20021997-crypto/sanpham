@@ -40,6 +40,7 @@ import {
 import {
   getShopeeAppConfig,
   setShopeeAppConfig,
+  fetchShopeeAppConfig,
   type ShopeeAppConfig,
 } from "@/lib/shopee";
 import {
@@ -794,8 +795,14 @@ function ShopeeTab() {
   const [showKey, setShowKey] = useState(false);
   const [appSaved, setAppSaved] = useState(false);
 
-  function handleSaveAppConfig() {
-    setShopeeAppConfig(appConfig);
+  useEffect(() => {
+    fetchShopeeAppConfig().then((cfg) => {
+      setAppConfig(cfg);
+    });
+  }, []);
+
+  async function handleSaveAppConfig() {
+    await setShopeeAppConfig(appConfig);
     setAppSaved(true);
     setTimeout(() => setAppSaved(false), 2500);
   }

@@ -1,0 +1,41 @@
+-- Migration: Tạo bảng cấu hình Shopee Partner App và danh sách Shopee Shops trên Supabase
+-- Bảng 1: Cấu hình Partner App dùng chung
+CREATE TABLE IF NOT EXISTS public.shopee_app_configs (
+  id integer PRIMARY KEY DEFAULT 1,
+  partner_id text NOT NULL DEFAULT '',
+  partner_key text NOT NULL DEFAULT '',
+  environment text NOT NULL DEFAULT 'live',
+  redirect_url text NOT NULL DEFAULT '',
+  updated_at timestamptz DEFAULT now()
+);
+
+-- Thêm dòng cấu hình mặc định id = 1 nếu chưa có
+INSERT INTO public.shopee_app_configs (id, partner_id, partner_key, environment, redirect_url)
+VALUES (1, '', '', 'live', '')
+ON CONFLICT (id) DO NOTHING;
+
+-- Bảng 2: Danh sách Gian Hàng Shopee
+CREATE TABLE IF NOT EXISTS public.shopee_shops (
+  id text PRIMARY KEY,
+  shop_id text NOT NULL,
+  shop_name text NOT NULL,
+  country text NOT NULL DEFAULT 'VN',
+  access_token text DEFAULT '',
+  refresh_token text DEFAULT '',
+  token_expires_at bigint DEFAULT NULL,
+  status text NOT NULL DEFAULT 'disconnected',
+  is_default boolean NOT NULL DEFAULT false,
+  note text DEFAULT '',
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+-- Phân quyền RLS (Row Level Security) cho phép truy cập đầy đủ
+ALTER TABLE public.shopee_app_configs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.shopee_shops ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Public full access to shopee_app_configs" ON public.shopee_app_configs;
+CREATE POLICY "Public full access to shopee_app_configs" ON public.shopee_app_configs FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Public full access to shopee_shops" ON public.shopee_shops;
+CREATE POLICY "Public full access to shopee_shops" ON public.shopee_shops FOR ALL USING (true) WITH CHECK (true);

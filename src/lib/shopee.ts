@@ -1,7 +1,9 @@
 /**
- * Shopee Open Platform API v2 Multi-Shop Integration Client
+ * Shopee Open Platform API v2 Multi-Shop Integration Client with Supabase & LocalStorage Sync
  * Tài liệu: https://open.shopee.com/documents/v2/v2.shop.auth_partner
  */
+
+import { supabase } from "@/lib/supabase";
 
 export interface ShopeeAppConfig {
   partnerId: string;
@@ -36,26 +38,13 @@ export const DEFAULT_SHOPEE_APP_CONFIG: ShopeeAppConfig = {
 };
 
 /**
- * Lấy cấu hình Partner App Shopee
+ * Lấy cấu hình Partner App Shopee (Đọc nhanh từ LocalStorage)
  */
 export function getShopeeAppConfig(): ShopeeAppConfig {
   if (typeof window === "undefined") return DEFAULT_SHOPEE_APP_CONFIG;
   try {
     const raw = localStorage.getItem(STORAGE_KEY_SHOPEE_APP);
-    if (!raw) {
-      // Tương thích ngược với bản v1 nếu có
-      const legacyRaw = localStorage.getItem("sanpham_shopee_config_v1");
-      if (legacyRaw) {
-        const legacy = JSON.parse(legacyRaw);
-        return {
-          partnerId: legacy.partnerId || "",
-          partnerKey: legacy.partnerKey || "",
-          environment: legacy.environment || "live",
-          redirectUrl: legacy.redirectUrl || DEFAULT_SHOPEE_APP_CONFIG.redirectUrl,
-        };
-      }
-      return DEFAULT_SHOPEE_APP_CONFIG;
-    }
+    if (!raw) return DEFAULT_SHOPEE_APP_CONFIG;
     return { ...DEFAULT_SHOPEE_APP_CONFIG, ...JSON.parse(raw) };
   } catch (err) {
     console.error("Lỗi đọc App Config Shopee:", err);
@@ -64,52 +53,74 @@ export function getShopeeAppConfig(): ShopeeAppConfig {
 }
 
 /**
- * Lưu cấu hình Partner App Shopee
+ * Lấy cấu hình Partner App từ Supabase (Đồng bộ vào LocalStorage)
  */
-export function setShopeeAppConfig(config: Partial<ShopeeAppConfig>): ShopeeAppConfig {
-  if (typeof window === "undefined") return DEFAULT_SHOPEE_APP_CONFIG;
+export async function fetchShopeeAppConfig(): Promise<ShopeeAppConfig> {
+  const local = getShopeeAppConfig();
+  try {
+    const { data, error } = await supabase
+      .from("shopee_app_configs")
+      .select("*")
+      .eq("id", 1)
+      .maybeSingle();
+
+    if (error || !data) {
+      return local;
+    }
+
+    const fetched: ShopeeAppConfig = {
+      partnerId: data.partner_id || "",
+      partnerKey: data.partner_key || "",
+      environment: (data.environment as "live" | "test") || "live",
+      redirectUrl: data.redirect_url || local.redirectUrl || DEFAULT_SHOPEE_APP_CONFIG.redirectUrl,
+    };
+
+    localStorage.setItem(STORAGE_KEY_SHOPEE_APP, JSON.stringify(fetched));
+    return fetched;
+  } catch (err) {
+    console.warn("Lỗi tải App Config từ Supabase:", err);
+    return local;
+  }
+}
+
+/**
+ * Lưu cấu hình Partner App Shopee vào cả Supabase và LocalStorage
+ */
+export async function setShopeeAppConfig(config: Partial<ShopeeAppConfig>): Promise<ShopeeAppConfig> {
   const current = getShopeeAppConfig();
   const updated: ShopeeAppConfig = { ...current, ...config };
-  localStorage.setItem(STORAGE_KEY_SHOPEE_APP, JSON.stringify(updated));
+  
+  if (typeof window !== "undefined") {
+    localStorage.setItem(STORAGE_KEY_SHOPEE_APP, JSON.stringify(updated));
+  }
+
+  try {
+    await supabase.from("shopee_app_configs").upsert({
+      id: 1,
+      partner_id: updated.partnerId.trim(),
+      partner_key: updated.partnerKey.trim(),
+      environment: updated.environment,
+      redirect_url: updated.redirectUrl.trim(),
+      updated_at: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.warn("Lỗi lưu App Config lên Supabase:", err);
+  }
+
   return updated;
 }
 
 /**
- * Lấy danh sách tất cả các Shop Shopee đã kết nối
+ * Lấy danh sách tất cả các Shop Shopee (Đọc nhanh từ LocalStorage)
  */
 export function getShopeeShops(): ShopeeShop[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = localStorage.getItem(STORAGE_KEY_SHOPEE_SHOPS);
-    if (!raw) {
-      // Migrate từ v1 nếu có shop cũ
-      const legacyRaw = localStorage.getItem("sanpham_shopee_config_v1");
-      if (legacyRaw) {
-        const legacy = JSON.parse(legacyRaw);
-        if (legacy.shopId && (legacy.accessToken || legacy.shopName)) {
-          const migratedShop: ShopeeShop = {
-            id: `shop_${legacy.shopId}_${Date.now()}`,
-            shopId: String(legacy.shopId),
-            shopName: legacy.shopName || `Shop ${legacy.shopId}`,
-            country: legacy.country || "VN",
-            accessToken: legacy.accessToken || "",
-            refreshToken: legacy.refreshToken || "",
-            tokenExpiresAt: legacy.tokenExpiresAt || null,
-            status: legacy.status || "connected",
-            isDefault: true,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          };
-          localStorage.setItem(STORAGE_KEY_SHOPEE_SHOPS, JSON.stringify([migratedShop]));
-          return [migratedShop];
-        }
-      }
-      return [];
-    }
+    if (!raw) return [];
 
     const list: ShopeeShop[] = JSON.parse(raw);
     const now = Date.now();
-    // Cập nhật trạng thái expired nếu quá hạn
     return list.map((shop) => {
       if (shop.accessToken && shop.tokenExpiresAt && now > shop.tokenExpiresAt) {
         return { ...shop, status: "expired" };
@@ -123,9 +134,60 @@ export function getShopeeShops(): ShopeeShop[] {
 }
 
 /**
- * Lưu hoặc cập nhật một Shop trong danh sách
+ * Lấy danh sách tất cả các Shop Shopee từ Supabase (Đồng bộ vào LocalStorage)
  */
-export function saveShopeeShop(shopData: Partial<ShopeeShop> & { shopId: string }): ShopeeShop {
+export async function fetchShopeeShops(): Promise<ShopeeShop[]> {
+  const localList = getShopeeShops();
+  try {
+    const { data, error } = await supabase
+      .from("shopee_shops")
+      .select("*")
+      .order("created_at", { ascending: true });
+
+    if (error || !data || data.length === 0) {
+      return localList;
+    }
+
+    const now = Date.now();
+    const fetchedList: ShopeeShop[] = data.map((d: any) => {
+      let status: "connected" | "expired" | "disconnected" = d.status || "connected";
+      if (!d.access_token) {
+        status = "disconnected";
+      } else if (d.token_expires_at && now > Number(d.token_expires_at)) {
+        status = "expired";
+      }
+
+      return {
+        id: String(d.id),
+        shopId: String(d.shop_id),
+        shopName: d.shop_name || `Shop ${d.shop_id}`,
+        country: d.country || "VN",
+        accessToken: d.access_token || "",
+        refreshToken: d.refresh_token || "",
+        tokenExpiresAt: d.token_expires_at ? Number(d.token_expires_at) : null,
+        status: status,
+        isDefault: Boolean(d.is_default),
+        note: d.note || "",
+        createdAt: d.created_at || new Date().toISOString(),
+        updatedAt: d.updated_at || new Date().toISOString(),
+      };
+    });
+
+    if (typeof window !== "undefined") {
+      localStorage.setItem(STORAGE_KEY_SHOPEE_SHOPS, JSON.stringify(fetchedList));
+    }
+
+    return fetchedList;
+  } catch (err) {
+    console.warn("Lỗi tải danh sách Shops từ Supabase:", err);
+    return localList;
+  }
+}
+
+/**
+ * Lưu hoặc cập nhật một Shop trong danh sách (Lưu đồng thời Supabase & LocalStorage)
+ */
+export async function saveShopeeShop(shopData: Partial<ShopeeShop> & { shopId: string }): Promise<ShopeeShop> {
   const list = getShopeeShops();
   const now = new Date().toISOString();
   const existingIndex = list.findIndex(
@@ -174,31 +236,78 @@ export function saveShopeeShop(shopData: Partial<ShopeeShop> & { shopId: string 
     list.push(updatedShop);
   }
 
-  localStorage.setItem(STORAGE_KEY_SHOPEE_SHOPS, JSON.stringify(list));
+  // Cập nhật LocalStorage
+  if (typeof window !== "undefined") {
+    localStorage.setItem(STORAGE_KEY_SHOPEE_SHOPS, JSON.stringify(list));
+  }
+
+  // Lưu Supabase
+  try {
+    if (updatedShop.isDefault) {
+      await supabase.from("shopee_shops").update({ is_default: false }).neq("id", "none");
+    }
+
+    await supabase.from("shopee_shops").upsert({
+      id: updatedShop.id,
+      shop_id: updatedShop.shopId,
+      shop_name: updatedShop.shopName,
+      country: updatedShop.country,
+      access_token: updatedShop.accessToken,
+      refresh_token: updatedShop.refreshToken,
+      token_expires_at: updatedShop.tokenExpiresAt,
+      status: updatedShop.status,
+      is_default: updatedShop.isDefault,
+      note: updatedShop.note,
+      updated_at: now,
+    });
+  } catch (err) {
+    console.warn("Lỗi lưu Shop lên Supabase:", err);
+  }
+
   return updatedShop;
 }
 
 /**
  * Xóa một Shop khỏi danh sách
  */
-export function deleteShopeeShop(id: string): ShopeeShop[] {
+export async function deleteShopeeShop(id: string): Promise<ShopeeShop[]> {
   const list = getShopeeShops().filter((s) => s.id !== id && s.shopId !== id);
   if (list.length > 0 && !list.some((s) => s.isDefault)) {
     list[0].isDefault = true;
   }
-  localStorage.setItem(STORAGE_KEY_SHOPEE_SHOPS, JSON.stringify(list));
+  if (typeof window !== "undefined") {
+    localStorage.setItem(STORAGE_KEY_SHOPEE_SHOPS, JSON.stringify(list));
+  }
+
+  try {
+    await supabase.from("shopee_shops").delete().or(`id.eq.${id},shop_id.eq.${id}`);
+  } catch (err) {
+    console.warn("Lỗi xóa Shop trên Supabase:", err);
+  }
+
   return list;
 }
 
 /**
  * Đặt một Shop làm Shop Mặc Định
  */
-export function setDefaultShopeeShop(id: string): ShopeeShop[] {
+export async function setDefaultShopeeShop(id: string): Promise<ShopeeShop[]> {
   const list = getShopeeShops().map((s) => ({
     ...s,
     isDefault: s.id === id || s.shopId === id,
   }));
-  localStorage.setItem(STORAGE_KEY_SHOPEE_SHOPS, JSON.stringify(list));
+
+  if (typeof window !== "undefined") {
+    localStorage.setItem(STORAGE_KEY_SHOPEE_SHOPS, JSON.stringify(list));
+  }
+
+  try {
+    await supabase.from("shopee_shops").update({ is_default: false }).neq("id", "none");
+    await supabase.from("shopee_shops").update({ is_default: true }).or(`id.eq.${id},shop_id.eq.${id}`);
+  } catch (err) {
+    console.warn("Lỗi cập nhật Shop mặc định trên Supabase:", err);
+  }
+
   return list;
 }
 
@@ -345,7 +454,7 @@ export async function exchangeShopeeAuthCode(
     console.warn("Không thể lấy thông tin tên shop chi tiết:", infoErr);
   }
 
-  const savedShop = saveShopeeShop({
+  const savedShop = await saveShopeeShop({
     shopId: String(shopId),
     shopName,
     country,
@@ -401,7 +510,7 @@ export async function refreshShopeeShopToken(shopIdOrInternalId: string): Promis
   const expireIn = data.expire_in || 14400;
   const tokenExpiresAt = Date.now() + expireIn * 1000;
 
-  const updatedShop = saveShopeeShop({
+  const updatedShop = await saveShopeeShop({
     id: shop.id,
     shopId: shop.shopId,
     accessToken,
@@ -466,7 +575,7 @@ export async function testShopeeShopConnection(shopIdOrInternalId: string): Prom
     const shopName = data.shop_name || shop.shopName;
     const country = data.country || shop.country || "VN";
 
-    const updated = saveShopeeShop({
+    const updated = await saveShopeeShop({
       id: shop.id,
       shopId: shop.shopId,
       shopName,
