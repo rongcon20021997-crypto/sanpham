@@ -2267,7 +2267,7 @@ function MasterGroupMediaModal({
   // Danh sách các mẫu AI Prompt (đồng bộ từ Supabase/localStorage hoặc mặc định)
   const [aiPromptsList, setAiPromptsList] = useState<AIPrompt[]>(() => {
     try {
-      const cached = localStorage.getItem("sanpham_ai_prompts_cache");
+      const cached = localStorage.getItem("sanpham_ai_prompts_cache_v3");
       if (cached) {
         const parsed = JSON.parse(cached);
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
@@ -2290,7 +2290,7 @@ function MasterGroupMediaModal({
           .order("created_at", { ascending: true });
         if (!error && data && data.length > 0) {
           setAiPromptsList(data as AIPrompt[]);
-          localStorage.setItem("sanpham_ai_prompts_cache", JSON.stringify(data));
+          localStorage.setItem("sanpham_ai_prompts_cache_v3", JSON.stringify(data));
         }
       } catch (err) {
         console.warn("Không thể tải ai_prompts từ Supabase:", err);

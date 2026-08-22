@@ -37,8 +37,29 @@ import {
   testOpenAiConnection,
 } from "@/lib/openai";
 
+import {
+  getShopeeConfig,
+  setShopeeConfig,
+  generateShopeeAuthUrl,
+  testShopeeConnection,
+  exchangeShopeeAuthCode,
+  refreshShopeeToken,
+  type ShopeeConfig,
+} from "@/lib/shopee";
+import {
+  ShoppingBag,
+  Link2,
+  ExternalLink,
+  ShieldCheck,
+  RotateCcw,
+  Globe,
+  Server,
+  HelpCircle,
+  CheckCircle,
+} from "lucide-react";
+
 export function SettingsPage() {
-  const [tab, setTab] = useState<"ai" | "colors" | "sizes" | "themes" | "code" | "sync">("ai");
+  const [tab, setTab] = useState<"ai" | "shopee" | "sync" | "colors" | "sizes" | "themes" | "code">("ai");
   const [loading, setLoading] = useState(true);
   const [colors, setColors] = useState<Color[]>([]);
   const [sizes, setSizes] = useState<Size[]>([]);
@@ -63,6 +84,7 @@ export function SettingsPage() {
 
   const tabs = [
     { key: "ai" as const, label: "AI OpenAI (Shopee)", icon: Sparkles },
+    { key: "shopee" as const, label: "Kết nối Sàn Shopee", icon: ShoppingBag },
     { key: "sync" as const, label: "Đồng bộ lưu trữ", icon: RefreshCw },
     { key: "colors" as const, label: "Màu", icon: Palette },
     { key: "sizes" as const, label: "Size", icon: Ruler },
@@ -72,7 +94,7 @@ export function SettingsPage() {
 
   return (
     <div className="animate-fade-in">
-      <PageHeader title="Cài đặt" subtitle="Quản lý cấu hình AI OpenAI, danh mục màu, size, chủ đề, quy tắc mã và đồng bộ lưu trữ" />
+      <PageHeader title="Cài đặt" subtitle="Quản lý cấu hình AI OpenAI, kết nối Sàn Shopee, danh mục màu, size, chủ đề và đồng bộ" />
 
       <div className="flex flex-wrap gap-1 p-1 bg-slate-900 rounded-xl border border-slate-700/50 mb-6 w-fit">
         {tabs.map((t) => {
@@ -93,6 +115,7 @@ export function SettingsPage() {
       ) : (
         <>
           {tab === "ai" && <OpenAiTab />}
+          {tab === "shopee" && <ShopeeTab />}
           {tab === "sync" && <SyncTab />}
           {tab === "colors" && <ColorsTab colors={colors} setColors={setColors} />}
           {tab === "sizes" && <SizesTab sizes={sizes} setSizes={setSizes} />}
@@ -765,6 +788,431 @@ function OpenAiTab() {
             <span>{saved ? "Đã lưu cài đặt AI!" : "Lưu cài đặt AI"}</span>
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function ShopeeTab() {
+  const [config, setConfig] = useState<ShopeeConfig>(getShopeeConfig());
+  const [showKey, setShowKey] = useState(false);
+  const [showToken, setShowToken] = useState(false);
+  const [authUrl, setAuthUrl] = useState("");
+  const [authCode, setAuthCode] = useState("");
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ success: boolean; message: string; shopName?: string } | null>(null);
+  const [exchanging, setExchanging] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
+
+  function handleChange(field: keyof ShopeeConfig, value: any) {
+    setConfig((prev) => ({ ...prev, [field]: value }));
+    setTestResult(null);
+  }
+
+  function handleSave() {
+    const updated = setShopeeConfig(config);
+    setConfig(updated);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2500);
+  }
+
+  async function handleGenerateAuthUrl() {
+    try {
+      if (!config.partnerId.trim() || !config.partnerKey.trim()) {
+        alert("Vui lòng nhập Partner ID và Partner Key trước khi tạo link ủy quyền.");
+        return;
+      }
+      handleSave();
+      const url = await generateShopeeAuthUrl(config.redirectUrl);
+      setAuthUrl(url);
+    } catch (err) {
+      alert(`Lỗi tạo URL: ${(err as Error).message}`);
+    }
+  }
+
+  async function handleExchangeCode() {
+    if (!authCode.trim()) {
+      alert("Vui lòng dán Mã ủy quyền (Code) do Shopee trả về.");
+      return;
+    }
+    if (!config.shopId.trim()) {
+      alert("Vui lòng nhập Shop ID của gian hàng.");
+      return;
+    }
+    setExchanging(true);
+    try {
+      handleSave();
+      await exchangeShopeeAuthCode(authCode.trim(), config.shopId.trim());
+      const updated = getShopeeConfig();
+      setConfig(updated);
+      setAuthCode("");
+      alert("🎉 Đã kết nối và lấy Access Token Shopee thành công!");
+    } catch (err) {
+      alert(`Lỗi đổi token: ${(err as Error).message}`);
+    } finally {
+      setExchanging(false);
+    }
+  }
+
+  async function handleRefreshToken() {
+    setRefreshing(true);
+    try {
+      await refreshShopeeToken();
+      const updated = getShopeeConfig();
+      setConfig(updated);
+      alert("✅ Đã làm mới Access Token thành công!");
+    } catch (err) {
+      alert(`Lỗi làm mới token: ${(err as Error).message}`);
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  async function handleTestConnection() {
+    setTesting(true);
+    setTestResult(null);
+    handleSave();
+    const res = await testShopeeConnection();
+    setTestResult(res);
+    setTesting(false);
+    if (res.success) {
+      setConfig(getShopeeConfig());
+    }
+  }
+
+  const isConnected = config.status === "connected" && config.accessToken;
+  const isExpired = config.status === "expired";
+
+  return (
+    <div className="space-y-6 max-w-3xl">
+      {/* Status Summary Banner */}
+      <div
+        className={`p-4 rounded-2xl border flex items-center justify-between gap-4 ${
+          isConnected
+            ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+            : isExpired
+            ? "bg-amber-500/10 border-amber-500/30 text-amber-300"
+            : "bg-slate-800/80 border-slate-700/60 text-slate-300"
+        }`}
+      >
+        <div className="flex items-center gap-3">
+          <div
+            className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold shrink-0 ${
+              isConnected
+                ? "bg-emerald-500/20 text-emerald-400"
+                : isExpired
+                ? "bg-amber-500/20 text-amber-400"
+                : "bg-slate-700 text-slate-400"
+            }`}
+          >
+            <ShoppingBag size={20} />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h4 className="font-bold text-sm text-slate-100">
+                {isConnected
+                  ? `Đã kết nối Gian hàng Shopee: ${config.shopName || config.shopId}`
+                  : isExpired
+                  ? "Cảnh báo: Access Token Shopee đã hết hạn"
+                  : "Chưa kết nối Gian hàng Shopee"}
+              </h4>
+              <span
+                className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                  isConnected
+                    ? "bg-emerald-500 text-slate-950"
+                    : isExpired
+                    ? "bg-amber-500 text-slate-950"
+                    : "bg-slate-700 text-slate-300"
+                }`}
+              >
+                {isConnected ? "CONNECTED" : isExpired ? "TOKEN EXPIRED" : "NOT CONNECTED"}
+              </span>
+            </div>
+            <p className="text-xs text-slate-400 mt-0.5">
+              {isConnected
+                ? `Môi trường: ${config.environment === "live" ? "Production (Sàn thật)" : "Sandbox (Test)"} • Shop ID: ${config.shopId}`
+                : "Thiết lập Partner ID & Partner Key từ Shopee Open Platform để kích hoạt tính năng kết nối và đăng sản phẩm tự động."}
+            </p>
+          </div>
+        </div>
+
+        {isConnected && config.refreshToken && (
+          <button
+            type="button"
+            onClick={handleRefreshToken}
+            disabled={refreshing}
+            className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 flex items-center gap-1.5 shrink-0 disabled:opacity-50"
+            title="Gia hạn thời gian sử dụng Access Token"
+          >
+            <RefreshCw size={13} className={refreshing ? "animate-spin" : ""} />
+            <span>{refreshing ? "Đang làm mới..." : "Làm mới Token"}</span>
+          </button>
+        )}
+      </div>
+
+      {/* Main Settings Card */}
+      <div className="card-gradient rounded-2xl border border-slate-700/50 p-6 space-y-6">
+        <div>
+          <h3 className="font-semibold text-slate-100 text-base mb-1 flex items-center gap-2">
+            <Key size={18} className="text-brand-400" /> Thông số Shopee Open Platform API v2
+          </h3>
+          <p className="text-xs text-slate-400">
+            Các thông số này được cấp trong trang quản trị nhà phát triển <strong>Shopee Open Platform Console</strong> (App Type: Partner App).
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {/* Partner ID */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center justify-between">
+              <span>Partner ID (Mã đối tác) <span className="text-rose-400 font-bold">*</span></span>
+              <span className="text-[11px] font-normal text-slate-400">Số nguyên</span>
+            </label>
+            <input
+              type="text"
+              value={config.partnerId}
+              onChange={(e) => handleChange("partnerId", e.target.value.trim())}
+              placeholder="VD: 2008542"
+              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-700/60 bg-slate-800/80 text-slate-100 text-xs font-mono outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500"
+            />
+          </div>
+
+          {/* Environment */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+              Môi trường API (Environment)
+            </label>
+            <select
+              value={config.environment}
+              onChange={(e) => handleChange("environment", e.target.value)}
+              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-700/60 bg-slate-800/80 text-slate-100 text-xs outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500 cursor-pointer"
+            >
+              <option value="live">Live / Production (Sàn thật Shopee Việt Nam)</option>
+              <option value="test">Test / Sandbox (Môi trường kiểm thử Shopee)</option>
+            </select>
+          </div>
+
+          {/* Partner Key */}
+          <div className="sm:col-span-2">
+            <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center justify-between">
+              <span>Partner Key (Khóa bí mật API Secret) <span className="text-rose-400 font-bold">*</span></span>
+              <span className="text-[11px] font-normal text-slate-400">Chuỗi ký tự Hex SHA256</span>
+            </label>
+            <div className="relative">
+              <input
+                type={showKey ? "text" : "password"}
+                value={config.partnerKey}
+                onChange={(e) => handleChange("partnerKey", e.target.value.trim())}
+                placeholder="VD: 74616263... (Secret Key)"
+                className="w-full px-3.5 py-2.5 pr-10 rounded-xl border border-slate-700/60 bg-slate-800/80 text-slate-100 text-xs font-mono outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500"
+              />
+              <button
+                type="button"
+                onClick={() => setShowKey(!showKey)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200"
+                title={showKey ? "Ẩn Key" : "Hiện Key"}
+              >
+                {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
+          </div>
+
+          {/* Shop ID */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center justify-between">
+              <span>Shop ID (Mã gian hàng Shopee)</span>
+              <span className="text-[11px] font-normal text-slate-400">Tự động điền sau khi ủy quyền</span>
+            </label>
+            <input
+              type="text"
+              value={config.shopId}
+              onChange={(e) => handleChange("shopId", e.target.value.trim())}
+              placeholder="VD: 10485923"
+              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-700/60 bg-slate-800/80 text-slate-100 text-xs font-mono outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500"
+            />
+          </div>
+
+          {/* Redirect / Callback URL */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center justify-between">
+              <span>Redirect URL (URL chuyển hướng)</span>
+              <span className="text-[11px] font-normal text-slate-400">Cấu hình khớp trên Shopee Console</span>
+            </label>
+            <input
+              type="text"
+              value={config.redirectUrl}
+              onChange={(e) => handleChange("redirectUrl", e.target.value.trim())}
+              placeholder="https://yourdomain.com/shopee-callback"
+              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-700/60 bg-slate-800/80 text-slate-100 text-xs font-mono outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500"
+            />
+          </div>
+
+          {/* Access Token */}
+          <div className="sm:col-span-2">
+            <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center justify-between">
+              <span>Access Token (Mã truy cập gian hàng)</span>
+              <span className="text-[11px] font-normal text-slate-400">Tự động sinh khi ủy quyền thành công</span>
+            </label>
+            <div className="relative">
+              <input
+                type={showToken ? "text" : "password"}
+                value={config.accessToken}
+                onChange={(e) => handleChange("accessToken", e.target.value.trim())}
+                placeholder="Chưa có token (Bấm tạo link ủy quyền bên dưới để cấp quyền)"
+                className="w-full px-3.5 py-2.5 pr-10 rounded-xl border border-slate-700/60 bg-slate-800/80 text-slate-100 text-xs font-mono outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500"
+              />
+              <button
+                type="button"
+                onClick={() => setShowToken(!showToken)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200"
+                title={showToken ? "Ẩn Token" : "Hiện Token"}
+              >
+                {showToken ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Action Buttons */}
+        <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-slate-700/60">
+          <button
+            type="button"
+            onClick={handleGenerateAuthUrl}
+            className="px-4 py-2.5 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold shadow-lg shadow-orange-500/20 transition-all flex items-center gap-1.5"
+          >
+            <Link2 size={15} />
+            <span>🔗 Tạo Link Ủy Quyền Gian Hàng</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleTestConnection}
+            disabled={testing || !config.partnerId.trim() || !config.partnerKey.trim()}
+            className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors flex items-center gap-1.5 disabled:opacity-40"
+          >
+            {testing && <Loader2 size={14} className="animate-spin" />}
+            <span>Kiểm tra kết nối Shopee</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleSave}
+            className="px-5 py-2.5 rounded-xl bg-brand-500 hover:bg-brand-600 text-white text-xs font-semibold shadow-lg shadow-brand-500/20 transition-all flex items-center gap-1.5 ml-auto"
+          >
+            {saved ? <Check size={15} /> : <Save size={15} />}
+            <span>{saved ? "Đã lưu cài đặt Shopee!" : "Lưu cài đặt"}</span>
+          </button>
+        </div>
+
+        {/* Generated Authorization URL Card */}
+        {authUrl && (
+          <div className="p-4 rounded-xl bg-slate-900 border border-orange-500/30 space-y-3 animate-fade-in">
+            <div className="flex items-center justify-between">
+              <span className="font-bold text-xs text-orange-400 flex items-center gap-1.5">
+                <ExternalLink size={14} /> Đường link ủy quyền Shopee (Shop Auth URL):
+              </span>
+              <a
+                href={authUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="px-3 py-1 rounded-lg bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold flex items-center gap-1 transition-colors"
+              >
+                <span>Mở trang ủy quyền Shopee</span>
+                <ExternalLink size={12} />
+              </a>
+            </div>
+            <p className="text-[11px] text-slate-400">
+              Hãy bấm vào nút bên trên hoặc sao chép đường link này, mở trên trình duyệt rồi đăng nhập vào tài khoản Shopee của bạn để xác nhận ủy quyền.
+            </p>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                readOnly
+                value={authUrl}
+                className="w-full px-3 py-1.5 rounded-lg bg-slate-950 text-slate-300 text-[11px] font-mono border border-slate-800 select-all"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText(authUrl);
+                  setCopiedLink(true);
+                  setTimeout(() => setCopiedLink(false), 2000);
+                }}
+                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 flex items-center gap-1 shrink-0"
+              >
+                {copiedLink ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />}
+                <span>{copiedLink ? "Đã chép" : "Sao chép"}</span>
+              </button>
+            </div>
+
+            {/* Hộp nhập Auth Code sau khi ủy quyền */}
+            <div className="pt-2 border-t border-slate-800/80 space-y-2">
+              <label className="block text-xs font-semibold text-slate-300">
+                Nhập Mã ủy quyền (Code) sau khi Shopee chuyển hướng về:
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={authCode}
+                  onChange={(e) => setAuthCode(e.target.value.trim())}
+                  placeholder="Dán mã code tại đây (VD: 614b...)"
+                  className="flex-1 px-3 py-2 rounded-lg bg-slate-950 text-slate-100 text-xs font-mono border border-slate-800 outline-none focus:border-brand-500"
+                />
+                <button
+                  type="button"
+                  onClick={handleExchangeCode}
+                  disabled={exchanging || !authCode.trim()}
+                  className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow transition-all flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {exchanging && <Loader2 size={13} className="animate-spin" />}
+                  <span>Xác nhận & Lấy Token</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Test Result Alert */}
+        {testResult && (
+          <div
+            className={`p-3.5 rounded-xl border flex items-start gap-2.5 text-xs ${
+              testResult.success
+                ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+                : "bg-rose-500/10 border-rose-500/30 text-rose-300"
+            }`}
+          >
+            {testResult.success ? (
+              <CheckCircle2 size={16} className="shrink-0 mt-0.5 text-emerald-400" />
+            ) : (
+              <AlertCircle size={16} className="shrink-0 mt-0.5 text-rose-400" />
+            )}
+            <div>
+              <p className="font-semibold">{testResult.success ? "Kết nối thành công!" : "Thông báo kết nối:"}</p>
+              <p className="mt-0.5 text-[11px] opacity-90">{testResult.message}</p>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Guide Box */}
+      <div className="p-5 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-3">
+        <h4 className="font-bold text-xs text-slate-200 flex items-center gap-2">
+          <HelpCircle size={16} className="text-brand-400" /> Hướng dẫn kết nối Shopee Open Platform:
+        </h4>
+        <ol className="list-decimal list-inside text-xs text-slate-400 space-y-1.5 leading-relaxed">
+          <li>
+            Truy cập cổng nhà phát triển Shopee:{" "}
+            <a href="https://open.shopee.com" target="_blank" rel="noreferrer" className="text-orange-400 hover:underline inline-flex items-center gap-1">
+              open.shopee.com <ExternalLink size={11} />
+            </a>
+          </li>
+          <li>Đăng nhập và tạo một ứng dụng <strong>Partner App</strong> (App Type: E-Commerce Solution / Shop Management).</li>
+          <li>Vào mục <strong>App Details</strong> để copy <strong>Partner ID</strong> và <strong>Partner Key</strong> dán vào form trên.</li>
+          <li>Bấm nút <strong>"🔗 Tạo Link Ủy Quyền Gian Hàng"</strong> để đăng nhập tài khoản Shopee và cho phép ứng dụng quản lý sản phẩm.</li>
+          <li>Sau khi ủy quyền xong, hệ thống sẽ tự động lưu <strong>Shop ID</strong> và <strong>Access Token</strong> để sẵn sàng đẩy sản phẩm lên Shopee!</li>
+        </ol>
       </div>
     </div>
   );

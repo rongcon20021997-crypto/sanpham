@@ -25,7 +25,7 @@ import {
 import type { AIPrompt } from "@/lib/types";
 import { DEFAULT_AI_PROMPTS } from "@/lib/defaultPrompts";
 
-const LOCAL_STORAGE_KEY = "sanpham_ai_prompts_cache";
+const LOCAL_STORAGE_KEY = "sanpham_ai_prompts_cache_v3";
 
 export function AIPromptsPage() {
   const [prompts, setPrompts] = useState<AIPrompt[]>([]);
