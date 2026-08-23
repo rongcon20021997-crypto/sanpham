@@ -619,7 +619,7 @@ export function TikTokShopsPage({ onNavigateToSettings }: TikTokShopsPageProps) 
       {/* MODAL 1: Thêm / Sửa Shop thủ công */}
       {isEditModalOpen && (
         <Modal
-          isOpen={isEditModalOpen}
+          open={isEditModalOpen}
           onClose={() => setIsEditModalOpen(false)}
           title={editingShop.id ? "Chỉnh sửa Gian Hàng TikTok" : "Thêm Gian Hàng TikTok thủ công"}
         >
@@ -735,35 +735,104 @@ export function TikTokShopsPage({ onNavigateToSettings }: TikTokShopsPageProps) 
       {/* MODAL 2: Ủy quyền kết nối TikTok Shop (OAuth2) */}
       {isAuthModalOpen && (
         <Modal
-          isOpen={isAuthModalOpen}
+          open={isAuthModalOpen}
           onClose={() => setIsAuthModalOpen(false)}
-          title="Ủy quyền kết nối Gian Hàng TikTok Shop"
+          title="Kết nối Gian Hàng TikTok Shop"
+          size="lg"
         >
           <div className="space-y-4">
+            {/* Cấu hình nhanh App Key / Secret nếu chưa nhập */}
+            {!isConfigured && (
+              <div className="p-4 rounded-xl bg-slate-800/80 border border-rose-500/30 space-y-3">
+                <div className="flex items-center gap-2 text-rose-400 font-bold text-xs">
+                  <Key size={16} />
+                  <span>Bước 1: Nhập Khóa ứng dụng (App Key) & Khóa bí mật (App Secret) của bạn</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-300 mb-1">
+                      Khóa ứng dụng (App Key) <span className="text-rose-400">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={appConfig.appKey}
+                      onChange={(e) => setAppConfig({ ...appConfig, appKey: e.target.value.trim() })}
+                      placeholder="Nhập App Key từ TikTok Partner"
+                      className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs font-mono focus:outline-none focus:border-rose-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-300 mb-1">
+                      Khóa bí mật (App Secret) <span className="text-rose-400">*</span>
+                    </label>
+                    <input
+                      type="password"
+                      value={appConfig.appSecret}
+                      onChange={(e) => setAppConfig({ ...appConfig, appSecret: e.target.value.trim() })}
+                      placeholder="Nhập App Secret"
+                      className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs font-mono focus:outline-none focus:border-rose-500"
+                    />
+                  </div>
+                </div>
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!appConfig.appKey || !appConfig.appSecret) {
+                        alert("Vui lòng nhập cả App Key và App Secret.");
+                        return;
+                      }
+                      await setTikTokAppConfig(appConfig);
+                      showToast("✅ Đã lưu cấu hình Khóa TikTok!");
+                    }}
+                    className="px-4 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold shadow-sm cursor-pointer"
+                  >
+                    Lưu cấu hình Khóa
+                  </button>
+                </div>
+              </div>
+            )}
+
             <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-200 text-xs space-y-1.5">
-              <p className="font-semibold text-rose-300">Cách kết nối TikTok Shop:</p>
+              <p className="font-semibold text-rose-300">Quy trình ủy quyền kết nối:</p>
               <ol className="list-decimal list-inside space-y-1 text-slate-300">
-                <li>Bấm nút <strong>"1. Mở trang đăng nhập & ủy quyền TikTok"</strong> bên dưới.</li>
+                <li>Bấm <strong>"Mở trang đăng nhập & ủy quyền TikTok"</strong> bên dưới.</li>
                 <li>Đăng nhập tài khoản TikTok Shop của bạn và bấm <strong>Authorize (Ủy quyền)</strong>.</li>
-                <li>Sau khi ủy quyền xong, TikTok sẽ chuyển hướng kèm theo mã <code>auth_code</code> trên thanh địa chỉ.</li>
-                <li>Sao chép mã <code>auth_code</code> hoặc toàn bộ đường link rồi dán vào ô bên dưới.</li>
+                <li>Sau khi ủy quyền xong, sao chép mã <code>auth_code</code> hoặc toàn bộ đường link rồi dán vào ô bên dưới.</li>
               </ol>
             </div>
 
-            <div>
+            <div className="flex flex-col sm:flex-row gap-2">
               <button
                 type="button"
                 onClick={handleOpenAuthLink}
-                className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-rose-500 to-pink-600 hover:from-rose-600 hover:to-pink-700 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-lg shadow-rose-900/30 cursor-pointer"
+                className="flex-1 py-2.5 px-4 rounded-xl bg-gradient-to-r from-rose-500 to-pink-600 hover:from-rose-600 hover:to-pink-700 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-lg shadow-rose-900/30 cursor-pointer"
               >
                 <ExternalLink size={14} />
-                <span>1. Mở trang đăng nhập & ủy quyền TikTok</span>
+                <span>Mở trang đăng nhập & ủy quyền TikTok</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  try {
+                    const url = generateTikTokAuthUrl(appConfig);
+                    navigator.clipboard.writeText(url);
+                    showToast("📋 Đã sao chép link ủy quyền vào bộ nhớ tạm!");
+                  } catch (e: any) {
+                    alert(e.message);
+                  }
+                }}
+                className="py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <Copy size={13} />
+                <span>Sao chép link</span>
               </button>
             </div>
 
             <div className="relative flex py-1 items-center">
               <div className="flex-grow border-t border-slate-700"></div>
-              <span className="flex-shrink mx-3 text-slate-500 text-[11px] font-semibold uppercase">Bước 2</span>
+              <span className="flex-shrink mx-3 text-slate-500 text-[11px] font-semibold uppercase">Bước tiếp theo</span>
               <div className="flex-grow border-t border-slate-700"></div>
             </div>
 
@@ -782,14 +851,13 @@ export function TikTokShopsPage({ onNavigateToSettings }: TikTokShopsPageProps) 
 
             <div>
               <label className="block text-xs font-semibold text-slate-300 mb-1">
-                Dán mã ủy quyền (Auth Code) hoặc URL sau khi ủy quyền <span className="text-red-400">*</span>
+                Dán mã ủy quyền (Auth Code) hoặc toàn bộ URL sau khi ủy quyền <span className="text-red-400">*</span>
               </label>
               <textarea
                 rows={3}
                 value={authCodeInput}
                 onChange={(e) => {
                   const val = e.target.value;
-                  // Nếu dán cả URL thì tự parse auth_code hoặc code
                   if (val.includes("code=") || val.includes("auth_code=")) {
                     try {
                       const url = new URL(val);
