@@ -551,28 +551,34 @@ export async function refreshShopeeShopToken(shopIdOrInternalId: string): Promis
       }),
     });
 
-    if (proxyRes.ok) {
-      const text = await proxyRes.text();
-      if (text) {
-        try {
-          const data = JSON.parse(text);
-          if (data && data.success) {
-            const updatedShop = await saveShopeeShop({
-              id: shop.id,
-              shopId: shop.shopId,
-              accessToken: data.accessToken,
-              refreshToken: data.refreshToken,
-              tokenExpiresAt: data.tokenExpiresAt,
-              status: "connected",
-            });
-            return updatedShop;
-          }
-        } catch {
-          // ignore non-json
+    const text = await proxyRes.text();
+    if (text) {
+      try {
+        const data = JSON.parse(text);
+        if (proxyRes.ok && data && data.success) {
+          const updatedShop = await saveShopeeShop({
+            id: shop.id,
+            shopId: shop.shopId,
+            accessToken: data.accessToken,
+            refreshToken: data.refreshToken,
+            tokenExpiresAt: data.tokenExpiresAt,
+            status: "connected",
+          });
+          return updatedShop;
+        }
+        if (data.error) {
+          throw new Error(data.error + (data.detail?.message ? ` (${data.detail.message})` : ""));
+        }
+      } catch (parseErr: any) {
+        if (parseErr.message && !parseErr.message.includes("JSON")) {
+          throw parseErr;
         }
       }
     }
-  } catch (proxyErr) {
+  } catch (proxyErr: any) {
+    if (proxyErr?.message && !proxyErr.message.includes("Failed to fetch")) {
+      throw proxyErr;
+    }
     console.warn("Proxy refresh failed, falling back to direct:", proxyErr);
   }
 

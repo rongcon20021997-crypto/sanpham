@@ -1353,7 +1353,7 @@ export function ShopeeShopsPage({ onNavigateToSettings }: ShopeeShopsPageProps) 
                       {shop.refreshToken && (
                         <button
                           type="button"
-                          onClick={() => handleRefreshToken(shop)}
+                          onClick={() => handleRefreshShopToken(shop)}
                           disabled={isActionLoading}
                           className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 flex items-center gap-1.5 cursor-pointer disabled:opacity-40"
                           title="Làm mới token"

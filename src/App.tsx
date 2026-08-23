@@ -11,28 +11,32 @@ import { ProductsPage } from "@/pages/ProductsPage";
 import { AIPromptsPage } from "@/pages/AIPromptsPage";
 import { ProductOptimizePage } from "@/pages/ProductOptimizePage";
 import { ShopeeShopsPage } from "@/pages/ShopeeShopsPage";
+import { TikTokShopsPage } from "@/pages/TikTokShopsPage";
 import { UsersPage } from "@/pages/UsersPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { Loader2 } from "lucide-react";
 import { exchangeShopeeAuthCode } from "@/lib/shopee";
+import { exchangeTikTokAuthCode } from "@/lib/tiktok";
 
 function AppContent() {
   const { session, profile, loading } = useAuth();
   const [page, setPage] = useState<PageKey>("dashboard");
-  const [shopeeAuthProcessing, setShopeeAuthProcessing] = useState(false);
+  const [authProcessingText, setAuthProcessingText] = useState<string | null>(null);
 
-  // Tự động bắt mã ủy quyền Shopee khi sàn Shopee redirect về
+  // Tự động bắt mã ủy quyền Shopee & TikTok Shop khi sàn redirect về
   useEffect(() => {
     if (typeof window === "undefined") return;
     const params = new URLSearchParams(window.location.search);
     const code = params.get("code");
     const shopId = params.get("shop_id");
+    const authCode = params.get("auth_code");
+    const state = params.get("state") || "";
 
+    // Shopee Callback
     if (code && shopId) {
-      setShopeeAuthProcessing(true);
+      setAuthProcessingText("Đang tự động xác thực và kết nối gian hàng Shopee...");
       exchangeShopeeAuthCode(code, shopId)
         .then((newShop) => {
-          // Xóa query params khỏi URL để sạch đẹp
           window.history.replaceState({}, document.title, window.location.pathname);
           setPage("shopee-shops");
           alert(`🎉 Đã kết nối tự động thành công gian hàng Shopee: "${newShop.shopName}" (Shop ID: ${newShop.shopId})!`);
@@ -41,17 +45,36 @@ function AppContent() {
           alert(`Lỗi tự động kết nối Shopee: ${err.message}`);
         })
         .finally(() => {
-          setShopeeAuthProcessing(false);
+          setAuthProcessingText(null);
+        });
+      return;
+    }
+
+    // TikTok Shop Callback
+    const tikTokCode = authCode || (code && (state.includes("tiktok") || window.location.pathname.includes("tiktok")) ? code : null);
+    if (tikTokCode) {
+      setAuthProcessingText("Đang tự động xác thực và kết nối gian hàng TikTok Shop...");
+      exchangeTikTokAuthCode(tikTokCode)
+        .then((newShop) => {
+          window.history.replaceState({}, document.title, window.location.pathname);
+          setPage("tiktok-shops");
+          alert(`🎉 Đã kết nối tự động thành công gian hàng TikTok Shop: "${newShop.shopName}"!`);
+        })
+        .catch((err) => {
+          alert(`Lỗi tự động kết nối TikTok Shop: ${err.message}`);
+        })
+        .finally(() => {
+          setAuthProcessingText(null);
         });
     }
   }, []);
 
-  if (loading || shopeeAuthProcessing) {
+  if (loading || authProcessingText) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-slate-950 text-slate-200 gap-3">
         <Loader2 className="animate-spin text-brand-400" size={36} />
-        {shopeeAuthProcessing && (
-          <p className="text-sm font-semibold text-orange-400">Đang tự động xác thực và kết nối gian hàng Shopee...</p>
+        {authProcessingText && (
+          <p className="text-sm font-semibold text-rose-400">{authProcessingText}</p>
         )}
       </div>
     );
@@ -78,6 +101,9 @@ function AppContent() {
       )}
       {effectivePage === "shopee-shops" && (
         <ShopeeShopsPage onNavigateToSettings={() => setPage("settings")} />
+      )}
+      {effectivePage === "tiktok-shops" && (
+        <TikTokShopsPage onNavigateToSettings={() => setPage("settings")} />
       )}
       {effectivePage === "users" && <UsersPage />}
       {effectivePage === "settings" && <SettingsPage />}

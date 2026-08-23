@@ -44,6 +44,12 @@ import {
   type ShopeeAppConfig,
 } from "@/lib/shopee";
 import {
+  getTikTokAppConfig,
+  setTikTokAppConfig,
+  fetchTikTokAppConfig,
+  type TikTokAppConfig,
+} from "@/lib/tiktok";
+import {
   ShoppingBag,
   Link2,
   ExternalLink,
@@ -57,7 +63,7 @@ import {
 } from "lucide-react";
 
 export function SettingsPage() {
-  const [tab, setTab] = useState<"ai" | "shopee" | "sync" | "colors" | "sizes" | "themes" | "code">("ai");
+  const [tab, setTab] = useState<"ai" | "shopee" | "tiktok" | "sync" | "colors" | "sizes" | "themes" | "code">("ai");
   const [loading, setLoading] = useState(true);
   const [colors, setColors] = useState<Color[]>([]);
   const [sizes, setSizes] = useState<Size[]>([]);
@@ -82,7 +88,8 @@ export function SettingsPage() {
 
   const tabs = [
     { key: "ai" as const, label: "AI OpenAI (Shopee)", icon: Sparkles },
-    { key: "shopee" as const, label: "Kết nối Sàn Shopee", icon: ShoppingBag },
+    { key: "shopee" as const, label: "Kết nối Shopee", icon: ShoppingBag },
+    { key: "tiktok" as const, label: "Kết nối TikTok Shop", icon: Store },
     { key: "sync" as const, label: "Đồng bộ lưu trữ", icon: RefreshCw },
     { key: "colors" as const, label: "Màu", icon: Palette },
     { key: "sizes" as const, label: "Size", icon: Ruler },
@@ -114,6 +121,7 @@ export function SettingsPage() {
         <>
           {tab === "ai" && <OpenAiTab />}
           {tab === "shopee" && <ShopeeTab />}
+          {tab === "tiktok" && <TikTokTab />}
           {tab === "sync" && <SyncTab />}
           {tab === "colors" && <ColorsTab colors={colors} setColors={setColors} />}
           {tab === "sizes" && <SizesTab sizes={sizes} setSizes={setSizes} />}
@@ -971,6 +979,171 @@ function ShopeeTab() {
           <li>Tạo một <strong>Partner App</strong> (App Type: E-Commerce Solution / Shop Management).</li>
           <li>Vào mục <strong>App Details</strong> để copy <strong>Partner ID</strong> và <strong>Partner Key</strong> dán vào form trên rồi bấm Lưu.</li>
           <li>Sau đó, sang menu <strong>"Gian hàng Shopee"</strong> ở thanh bên trái để bấm ủy quyền kết nối các Shop.</li>
+        </ol>
+      </div>
+    </div>
+  );
+}
+
+function TikTokTab() {
+  const [appConfig, setAppConfig] = useState<TikTokAppConfig>(getTikTokAppConfig());
+  const [showSecret, setShowSecret] = useState(false);
+  const [appSaved, setAppSaved] = useState(false);
+
+  useEffect(() => {
+    fetchTikTokAppConfig().then((cfg) => {
+      setAppConfig(cfg);
+    });
+  }, []);
+
+  async function handleSaveAppConfig() {
+    await setTikTokAppConfig(appConfig);
+    setAppSaved(true);
+    setTimeout(() => setAppSaved(false), 2500);
+  }
+
+  return (
+    <div className="card-gradient rounded-2xl border border-slate-700/50 p-6 max-w-2xl space-y-6">
+      <div>
+        <h3 className="font-semibold text-slate-100 text-base mb-1 flex items-center gap-2">
+          <Store size={18} className="text-rose-400" /> Cấu hình TikTok Shop Partner (Ứng dụng nội bộ)
+        </h3>
+        <p className="text-xs text-slate-400">
+          Lưu thông số <strong>Khóa ứng dụng (App Key)</strong> và <strong>Khóa bí mật của ứng dụng (App Secret)</strong> do TikTok Shop Partner Center cấp để kết nối API. Sau khi lưu, bạn có thể vào menu <strong>"Gian hàng TikTok"</strong> để kết nối và tự động làm mới token.
+        </p>
+      </div>
+
+      <div className="space-y-4">
+        {/* App Key */}
+        <div>
+          <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center justify-between">
+            <span>Khóa ứng dụng (App Key) <span className="text-rose-400 font-bold">*</span></span>
+            <span className="text-[11px] font-normal text-slate-400">App Key từ TikTok Partner</span>
+          </label>
+          <input
+            type="text"
+            value={appConfig.appKey}
+            onChange={(e) => setAppConfig({ ...appConfig, appKey: e.target.value.trim() })}
+            placeholder="VD: 6b7c8d9e..."
+            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-700/60 bg-slate-800/80 text-slate-100 text-xs font-mono outline-none focus:ring-2 focus:ring-rose-500/30 focus:border-rose-500"
+          />
+        </div>
+
+        {/* App Secret */}
+        <div>
+          <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center justify-between">
+            <span>Khóa bí mật của ứng dụng (App Secret) <span className="text-rose-400 font-bold">*</span></span>
+            <span className="text-[11px] font-normal text-slate-400">App Secret bảo mật</span>
+          </label>
+          <div className="relative">
+            <input
+              type={showSecret ? "text" : "password"}
+              value={appConfig.appSecret}
+              onChange={(e) => setAppConfig({ ...appConfig, appSecret: e.target.value.trim() })}
+              placeholder="VD: a1b2c3d4e5f6... (App Secret)"
+              className="w-full px-3.5 py-2.5 pr-10 rounded-xl border border-slate-700/60 bg-slate-800/80 text-slate-100 text-xs font-mono outline-none focus:ring-2 focus:ring-rose-500/30 focus:border-rose-500"
+            />
+            <button
+              type="button"
+              onClick={() => setShowSecret(!showSecret)}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200"
+              title={showSecret ? "Ẩn Secret" : "Hiện Secret"}
+            >
+              {showSecret ? <EyeOff size={16} /> : <Eye size={16} />}
+            </button>
+          </div>
+        </div>
+
+        {/* Service ID (Tùy chọn) */}
+        <div>
+          <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center justify-between">
+            <span>Service ID (Tùy chọn)</span>
+            <span className="text-[11px] font-normal text-slate-400">Dành cho app dạng Service</span>
+          </label>
+          <input
+            type="text"
+            value={appConfig.serviceId}
+            onChange={(e) => setAppConfig({ ...appConfig, serviceId: e.target.value.trim() })}
+            placeholder="VD: 72481923..."
+            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-700/60 bg-slate-800/80 text-slate-100 text-xs font-mono outline-none focus:ring-2 focus:ring-rose-500/30 focus:border-rose-500"
+          />
+        </div>
+
+        {/* Environment */}
+        <div>
+          <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+            Môi trường API (Environment)
+          </label>
+          <select
+            value={appConfig.environment}
+            onChange={(e) => setAppConfig({ ...appConfig, environment: e.target.value as "live" | "sandbox" })}
+            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-700/60 bg-slate-800/80 text-slate-100 text-xs outline-none focus:ring-2 focus:ring-rose-500/30 focus:border-rose-500 cursor-pointer"
+          >
+            <option value="live">Live / Production (TikTok Shop Thật)</option>
+            <option value="sandbox">Sandbox / Test (Môi trường kiểm thử)</option>
+          </select>
+        </div>
+
+        {/* Redirect URL */}
+        <div className="p-3.5 rounded-xl bg-slate-900/90 border border-slate-700/60 space-y-2">
+          <div className="flex items-center justify-between">
+            <label className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+              <Globe size={14} className="text-rose-400" /> Redirect URL (URL chuyển hướng khi ủy quyền)
+            </label>
+            <span className="text-[11px] text-rose-400 font-medium">Tự động nhận diện</span>
+          </div>
+
+          <p className="text-[11px] text-slate-400">
+            Dán vào mục <strong>Redirect URL</strong> trên TikTok Shop Partner Center:
+          </p>
+
+          <div className="flex gap-2">
+            <input
+              type="text"
+              readOnly
+              value={typeof window !== "undefined" ? `${window.location.origin}/tiktok-callback` : "http://localhost:5173/tiktok-callback"}
+              className="w-full px-3 py-2 rounded-xl bg-slate-950 text-slate-200 text-xs font-mono border border-slate-800 select-all outline-none"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                const url = typeof window !== "undefined" ? `${window.location.origin}/tiktok-callback` : "http://localhost:5173/tiktok-callback";
+                navigator.clipboard.writeText(url);
+                setAppSaved(true);
+                setTimeout(() => setAppSaved(false), 2000);
+              }}
+              className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 text-xs font-semibold border border-slate-700 flex items-center gap-1.5 shrink-0 cursor-pointer transition-colors shadow-sm"
+              title="Sao chép Redirect URL"
+            >
+              <Globe size={13} className="text-rose-400" />
+              <span>Sao chép</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Actions */}
+        <div className="flex flex-wrap items-center gap-3 pt-2">
+          <button
+            type="button"
+            onClick={handleSaveAppConfig}
+            className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold shadow-lg shadow-rose-900/30 transition-all flex items-center gap-1.5 cursor-pointer"
+          >
+            {appSaved ? <Check size={15} /> : <Save size={15} />}
+            <span>{appSaved ? "Đã lưu cài đặt TikTok App!" : "Lưu cài đặt TikTok Shop"}</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Guide Box */}
+      <div className="p-4 rounded-xl bg-slate-900/60 border border-slate-800 space-y-2">
+        <h4 className="font-bold text-xs text-slate-200 flex items-center gap-1.5">
+          <HelpCircle size={15} className="text-rose-400" /> Hướng dẫn lấy Khóa ứng dụng TikTok:
+        </h4>
+        <ol className="list-decimal list-inside text-xs text-slate-400 space-y-1 leading-relaxed">
+          <li>Truy cập <a href="https://partner.tiktokshop.com" target="_blank" rel="noreferrer" className="text-rose-400 hover:underline">TikTok Shop Partner Center</a>.</li>
+          <li>Vào <strong>App Management</strong> &gt; Tạo ứng dụng <strong>Custom App (Ứng dụng nội bộ)</strong>.</li>
+          <li>Sao chép <strong>Khóa ứng dụng (App Key)</strong> và <strong>Khóa bí mật của ứng dụng (App Secret)</strong> dán vào form trên rồi bấm Lưu.</li>
+          <li>Sau đó, sang menu <strong>"Gian hàng TikTok"</strong> ở thanh bên trái để kết nối và kiểm tra token của Shop.</li>
         </ol>
       </div>
     </div>
