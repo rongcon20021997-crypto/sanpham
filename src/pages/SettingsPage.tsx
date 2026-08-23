@@ -1,8 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { supabase } from "@/lib/supabase";
 import type { Color, Size, Theme, CodeRule } from "@/lib/types";
 import { PageHeader, EmptyState } from "@/components/PageParts";
 import { Field } from "@/components/Field";
+import { Modal } from "@/components/Modal";
+import { ImageCropperModal } from "@/components/ImageCropperModal";
+import { uploadFile } from "@/lib/helpers";
 import { useSync } from "@/context/SyncContext";
 import {
   Plus,
@@ -26,6 +29,20 @@ import {
   AlertCircle,
   Pencil,
   X,
+  Upload,
+  Image as ImageIcon,
+  Crop,
+  Maximize2,
+  HelpCircle,
+  CheckCircle,
+  Store,
+  ShoppingBag,
+  Link2,
+  ExternalLink,
+  ShieldCheck,
+  RotateCcw,
+  Globe,
+  Server,
 } from "lucide-react";
 import {
   getOpenAiApiKey,
@@ -41,6 +58,8 @@ import {
   getShopeeAppConfig,
   setShopeeAppConfig,
   fetchShopeeAppConfig,
+  getShopeeSizeChartUrl,
+  setShopeeSizeChartUrl,
   type ShopeeAppConfig,
 } from "@/lib/shopee";
 import {
@@ -49,18 +68,6 @@ import {
   fetchTikTokAppConfig,
   type TikTokAppConfig,
 } from "@/lib/tiktok";
-import {
-  ShoppingBag,
-  Link2,
-  ExternalLink,
-  ShieldCheck,
-  RotateCcw,
-  Globe,
-  Server,
-  HelpCircle,
-  CheckCircle,
-  Store,
-} from "lucide-react";
 
 export function SettingsPage() {
   const [tab, setTab] = useState<"ai" | "shopee" | "tiktok" | "sync" | "colors" | "sizes" | "themes" | "code">("ai");
@@ -538,26 +545,34 @@ function SizesTab({ sizes, setSizes }: { sizes: Size[]; setSizes: (s: Size[]) =>
   }
 
   return (
-    <div className="card-gradient rounded-2xl border border-slate-700/50 p-6">
-      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 mb-6">
-        <Field label="Mã size" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })} placeholder="XL" />
-        <Field label="Tên size" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="XL" />
-        <Field label="Thứ tự" type="number" value={form.sort_order} onChange={(e) => setForm({ ...form, sort_order: e.target.value })} placeholder="0" />
-        <div className="flex items-end">
-          <button onClick={add} className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-brand-500 text-white text-sm font-medium hover:bg-brand-600"><Plus size={18} /> Thêm</button>
+    <div className="space-y-6">
+      <div className="card-gradient rounded-2xl border border-slate-700/50 p-6">
+        <div className="flex items-center gap-2 mb-4 pb-3 border-b border-slate-700/60">
+          <Ruler className="text-brand-400" size={18} />
+          <h3 className="font-semibold text-slate-100 text-base">Danh mục kích cỡ (Size)</h3>
         </div>
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 mb-6">
+          <Field label="Mã size" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })} placeholder="XL" />
+          <Field label="Tên size" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="XL" />
+          <Field label="Thứ tự" type="number" value={form.sort_order} onChange={(e) => setForm({ ...form, sort_order: e.target.value })} placeholder="0" />
+          <div className="flex items-end">
+            <button onClick={add} className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-brand-500 text-white text-sm font-medium hover:bg-brand-600"><Plus size={18} /> Thêm</button>
+          </div>
+        </div>
+        {sizes.length === 0 ? <EmptyState message="Chưa có size nào." /> : (
+          <div className="flex flex-wrap gap-2">
+            {sizes.map((s) => (
+              <div key={s.id} className="flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-700/50 hover:border-slate-600 group">
+                <span className="text-sm font-medium text-slate-200">{s.name}</span>
+                <span className="text-xs text-slate-500 font-mono">{s.code}</span>
+                <button onClick={() => remove(s.id)} className="p-1 rounded text-slate-600 hover:text-rose-400 opacity-0 group-hover:opacity-100"><Trash2 size={12} /></button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
-      {sizes.length === 0 ? <EmptyState message="Chưa có size nào." /> : (
-        <div className="flex flex-wrap gap-2">
-          {sizes.map((s) => (
-            <div key={s.id} className="flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-700/50 hover:border-slate-600 group">
-              <span className="text-sm font-medium text-slate-200">{s.name}</span>
-              <span className="text-xs text-slate-500 font-mono">{s.code}</span>
-              <button onClick={() => remove(s.id)} className="p-1 rounded text-slate-600 hover:text-rose-400 opacity-0 group-hover:opacity-100"><Trash2 size={12} /></button>
-            </div>
-          ))}
-        </div>
-      )}
+
+      <ShopeeSizeChartCard />
     </div>
   );
 }
@@ -798,6 +813,251 @@ function OpenAiTab() {
     </div>
   );
 }
+function ShopeeSizeChartCard() {
+  const [sizeChartUrl, setSizeChartUrl] = useState<string>(getShopeeSizeChartUrl());
+  const [uploading, setUploading] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [cropperOpen, setCropperOpen] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    fetchShopeeAppConfig().then((cfg) => {
+      if (cfg.sizeChartUrl) {
+        setSizeChartUrl(cfg.sizeChartUrl);
+      }
+    });
+  }, []);
+
+  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploading(true);
+    try {
+      const url = await uploadFile(file, "settings/size-charts", "SHOPEE_SIZE_CHART_DEFAULT");
+      if (url) {
+        setSizeChartUrl(url);
+        await setShopeeSizeChartUrl(url);
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2500);
+      }
+    } catch (err: any) {
+      alert("Lỗi tải ảnh lên: " + (err.message || String(err)));
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  async function handleRemove() {
+    if (!confirm("Bạn có chắc chắn muốn xóa ảnh Bảng quy đổi kích cỡ này? Hệ thống sẽ quay về tự động sinh ảnh vẽ khi đẩy sản phẩm lên Shopee.")) return;
+    setSizeChartUrl("");
+    await setShopeeSizeChartUrl("");
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2500);
+  }
+
+  async function handleCropped(newUrl: string | null) {
+    if (newUrl) {
+      setSizeChartUrl(newUrl);
+      await setShopeeSizeChartUrl(newUrl);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    }
+  }
+
+  return (
+    <div className="card-gradient rounded-2xl border border-slate-700/50 p-6 max-w-2xl space-y-5">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-4 border-b border-slate-700/60">
+        <div>
+          <h3 className="font-semibold text-slate-100 text-base flex items-center gap-2">
+            <Ruler size={19} className="text-orange-400" /> Bảng quy đổi kích cỡ Shopee (Size Chart)
+          </h3>
+          <p className="text-xs text-slate-400 mt-1">
+            Tải lên 1 ảnh Bảng quy đổi kích cỡ hoàn chỉnh của shop. Khi bạn đẩy sản phẩm lên Shopee, hệ thống sẽ tự động dùng hình ảnh này làm <strong>Bảng quy đổi kích cỡ (Size Chart)</strong> thay vì ảnh tự vẽ.
+          </p>
+        </div>
+
+        <div>
+          {sizeChartUrl ? (
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 whitespace-nowrap">
+              <CheckCircle2 size={13} /> Đã có ảnh chuẩn
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20 whitespace-nowrap">
+              <AlertCircle size={13} /> Tự động vẽ canvas
+            </span>
+          )}
+        </div>
+      </div>
+
+      <input
+        type="file"
+        ref={fileInputRef}
+        accept="image/*"
+        onChange={handleFileUpload}
+        className="hidden"
+      />
+
+      {sizeChartUrl ? (
+        <div className="space-y-4">
+          <div className="relative rounded-2xl border-2 border-slate-700/80 bg-slate-950/60 p-3 overflow-hidden group">
+            <div className="w-full h-64 sm:h-80 flex items-center justify-center bg-slate-900/40 rounded-xl overflow-hidden">
+              <img
+                src={sizeChartUrl}
+                alt="Bảng quy đổi kích cỡ Shopee"
+                className="max-h-full max-w-full object-contain rounded-lg shadow-md cursor-pointer transition-transform hover:scale-[1.02]"
+                onClick={() => setPreviewOpen(true)}
+              />
+            </div>
+
+            {/* Quick action overlay buttons */}
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-3">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPreviewOpen(true)}
+                  className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <Maximize2 size={13} className="text-brand-400" />
+                  <span>Phóng to</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setCropperOpen(true)}
+                  className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <Crop size={13} className="text-purple-400" />
+                  <span>Cắt & Chỉnh sửa</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploading}
+                  className="px-3 py-1.5 rounded-xl bg-brand-500 hover:bg-brand-600 text-white text-xs font-semibold flex items-center gap-1.5 shadow-md shadow-brand-500/20 transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  {uploading ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
+                  <span>{uploading ? "Đang tải lên..." : "Thay đổi ảnh"}</span>
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleRemove}
+                className="px-3 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500 text-rose-400 hover:text-white text-xs font-semibold border border-rose-500/20 flex items-center gap-1.5 transition-all cursor-pointer"
+              >
+                <Trash2 size={13} />
+                <span>Xóa ảnh</span>
+              </button>
+            </div>
+          </div>
+
+          {saved && (
+            <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs flex items-center gap-2">
+              <CheckCircle2 size={16} className="text-emerald-400 shrink-0" />
+              <span>Đã lưu ảnh Bảng quy đổi kích cỡ Shopee thành công!</span>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <div
+            onClick={() => fileInputRef.current?.click()}
+            className="w-full h-52 sm:h-60 rounded-2xl border-2 border-dashed border-slate-700 hover:border-orange-500/80 bg-slate-900/40 hover:bg-orange-500/5 transition-all flex flex-col items-center justify-center gap-3 cursor-pointer p-6 text-center group"
+          >
+            <div className="p-3.5 rounded-2xl bg-orange-500/10 text-orange-400 border border-orange-500/20 group-hover:scale-110 transition-transform">
+              {uploading ? (
+                <Loader2 size={32} className="animate-spin text-orange-400" />
+              ) : (
+                <Ruler size={32} />
+              )}
+            </div>
+
+            <div>
+              <p className="text-sm font-semibold text-slate-200 group-hover:text-orange-400 transition-colors">
+                {uploading ? "Đang tải ảnh lên máy chủ..." : "Bấm để tải lên ảnh Bảng quy đổi kích cỡ của shop"}
+              </p>
+              <p className="text-xs text-slate-400 mt-1">
+                Hỗ trợ định dạng JPG, PNG, WebP (Ảnh rõ nét, đầy đủ thông số đo hoặc cân nặng/chiều cao)
+              </p>
+            </div>
+
+            <button
+              type="button"
+              disabled={uploading}
+              className="mt-1 px-4 py-2 rounded-xl bg-orange-600 hover:bg-orange-500 text-white text-xs font-semibold shadow-lg shadow-orange-900/20 flex items-center gap-2 transition-all cursor-pointer"
+            >
+              <Upload size={14} />
+              <span>Chọn ảnh từ máy tính</span>
+            </button>
+          </div>
+
+          {saved && (
+            <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs flex items-center gap-2">
+              <CheckCircle2 size={16} className="text-emerald-400 shrink-0" />
+              <span>Đã cập nhật cài đặt Bảng quy đổi kích cỡ!</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Shopee Best Practice Tips */}
+      <div className="p-4 rounded-xl bg-slate-900/60 border border-slate-800 text-xs text-slate-400 space-y-1.5 leading-relaxed">
+        <h4 className="font-bold text-slate-200 flex items-center gap-1.5 text-xs">
+          <HelpCircle size={14} className="text-orange-400" /> Tiêu chuẩn Bảng quy đổi kích cỡ Shopee:
+        </h4>
+        <ul className="list-disc list-inside space-y-1 text-slate-400 pl-1 text-[11px]">
+          <li>Hình ảnh nên có tỷ lệ <strong>1:1</strong> (tối thiểu 700x700 px) hoặc ảnh dọc rõ ràng, nền trắng hoặc màu sáng.</li>
+          <li>Bảng size phải có đầy đủ cột tên Size (S, M, L, XL, 2XL...) cùng các thông số đo chính xác (Dài áo, Rộng ngực, Rộng vai...).</li>
+          <li>Shopee AI sẽ quét và duyệt tự động hình ảnh bảng size để kích hoạt tính năng chọn size thông minh cho người mua.</li>
+        </ul>
+      </div>
+
+      {/* Lightbox / Zoom Modal */}
+      {previewOpen && (
+        <Modal
+          open={previewOpen}
+          onClose={() => setPreviewOpen(false)}
+          title="Xem ảnh Bảng quy đổi kích cỡ Shopee"
+          size="lg"
+        >
+          <div className="flex flex-col items-center justify-center p-2">
+            <img
+              src={sizeChartUrl}
+              alt="Bảng size lớn"
+              className="max-h-[75vh] w-auto object-contain rounded-xl border border-slate-700/80 shadow-2xl"
+            />
+            <div className="mt-4 flex items-center justify-end w-full gap-2">
+              <button
+                type="button"
+                onClick={() => setPreviewOpen(false)}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700"
+              >
+                Đóng
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Image Cropper Modal */}
+      {cropperOpen && (
+        <ImageCropperModal
+          imageUrl={sizeChartUrl}
+          isOpen={cropperOpen}
+          onClose={() => setCropperOpen(false)}
+          onCropComplete={handleCropped}
+          folder="settings/size-charts"
+          customCode="SHOPEE_SIZE_CHART"
+        />
+      )}
+    </div>
+  );
+}
+
 function ShopeeTab() {
   const [appConfig, setAppConfig] = useState<ShopeeAppConfig>(getShopeeAppConfig());
   const [showKey, setShowKey] = useState(false);
@@ -816,170 +1076,176 @@ function ShopeeTab() {
   }
 
   return (
-    <div className="card-gradient rounded-2xl border border-slate-700/50 p-6 max-w-2xl space-y-6">
-      <div>
-        <h3 className="font-semibold text-slate-100 text-base mb-1 flex items-center gap-2">
-          <Key size={18} className="text-brand-400" /> Cấu hình Shopee Open Platform (Partner App)
-        </h3>
-        <p className="text-xs text-slate-400">
-          Lưu thông số <strong>Partner ID</strong> và <strong>Partner Key</strong> do Shopee cấp để kết nối API. Sau khi lưu, bạn có thể vào menu <strong>"Gian hàng Shopee"</strong> để quản lý và kết nối nhiều shop.
-        </p>
-      </div>
+    <div className="space-y-6">
+      {/* 1. Bảng quy đổi kích cỡ Shopee */}
+      <ShopeeSizeChartCard />
 
-      <div className="space-y-4">
-        {/* Partner ID */}
+      {/* 2. Cấu hình Partner App */}
+      <div className="card-gradient rounded-2xl border border-slate-700/50 p-6 max-w-2xl space-y-6">
         <div>
-          <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center justify-between">
-            <span>Partner ID (Mã đối tác) <span className="text-rose-400 font-bold">*</span></span>
-            <span className="text-[11px] font-normal text-slate-400">Số nguyên từ Shopee Console</span>
-          </label>
-          <input
-            type="text"
-            value={appConfig.partnerId}
-            onChange={(e) => setAppConfig({ ...appConfig, partnerId: e.target.value.trim() })}
-            placeholder="VD: 2008542"
-            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-700/60 bg-slate-800/80 text-slate-100 text-xs font-mono outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500"
-          />
-        </div>
-
-        {/* Partner Key */}
-        <div>
-          <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center justify-between">
-            <span>Partner Key (Khóa bảo mật Secret) <span className="text-rose-400 font-bold">*</span></span>
-            <span className="text-[11px] font-normal text-slate-400">Chuỗi Hex SHA256</span>
-          </label>
-          <div className="relative">
-            <input
-              type={showKey ? "text" : "password"}
-              value={appConfig.partnerKey}
-              onChange={(e) => setAppConfig({ ...appConfig, partnerKey: e.target.value.trim() })}
-              placeholder="VD: 7461626364... (Secret Key)"
-              className="w-full px-3.5 py-2.5 pr-10 rounded-xl border border-slate-700/60 bg-slate-800/80 text-slate-100 text-xs font-mono outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500"
-            />
-            <button
-              type="button"
-              onClick={() => setShowKey(!showKey)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200"
-              title={showKey ? "Ẩn Key" : "Hiện Key"}
-            >
-              {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
-            </button>
-          </div>
-        </div>
-
-        {/* Environment */}
-        <div>
-          <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-            Môi trường API (Environment)
-          </label>
-          <select
-            value={appConfig.environment}
-            onChange={(e) => setAppConfig({ ...appConfig, environment: e.target.value as "live" | "test" })}
-            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-700/60 bg-slate-800/80 text-slate-100 text-xs outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500 cursor-pointer"
-          >
-            <option value="live">Live / Production (Sàn thật Shopee Việt Nam)</option>
-            <option value="test">Test / Sandbox (Môi trường kiểm thử Shopee)</option>
-          </select>
-        </div>
-
-        {/* Redirect URL (Chỉ hiển thị để copy dán vào Shopee Console) */}
-        <div className="p-3.5 rounded-xl bg-slate-900/90 border border-slate-700/60 space-y-2">
-          <div className="flex items-center justify-between">
-            <label className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
-              <Globe size={14} className="text-brand-400" /> Redirect URL (URL chuyển hướng khi ủy quyền OAuth2)
-            </label>
-            <span className="text-[11px] text-amber-400 font-medium">Tự động nhận diện</span>
-          </div>
-
-          <p className="text-[11px] text-slate-400">
-            Dán vào mục <strong>Redirect URL</strong> trên Shopee Console (<code>open.shopee.com</code>):
+          <h3 className="font-semibold text-slate-100 text-base mb-1 flex items-center gap-2">
+            <Key size={18} className="text-brand-400" /> Cấu hình Shopee Open Platform (Partner App)
+          </h3>
+          <p className="text-xs text-slate-400">
+            Lưu thông số <strong>Partner ID</strong> và <strong>Partner Key</strong> do Shopee cấp để kết nối API. Sau khi lưu, bạn có thể vào menu <strong>"Gian hàng Shopee"</strong> để quản lý và kết nối nhiều shop.
           </p>
+        </div>
 
-          <div className="flex gap-2">
+        <div className="space-y-4">
+          {/* Partner ID */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center justify-between">
+              <span>Partner ID (Mã đối tác) <span className="text-rose-400 font-bold">*</span></span>
+              <span className="text-[11px] font-normal text-slate-400">Số nguyên từ Shopee Console</span>
+            </label>
             <input
               type="text"
-              readOnly
-              value={typeof window !== "undefined" ? `${window.location.origin}/shopee-callback` : "http://localhost:5173/shopee-callback"}
-              className="w-full px-3 py-2 rounded-xl bg-slate-950 text-slate-200 text-xs font-mono border border-slate-800 select-all outline-none"
+              value={appConfig.partnerId}
+              onChange={(e) => setAppConfig({ ...appConfig, partnerId: e.target.value.trim() })}
+              placeholder="VD: 2008542"
+              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-700/60 bg-slate-800/80 text-slate-100 text-xs font-mono outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500"
             />
-            <button
-              type="button"
-              onClick={() => {
-                const url = typeof window !== "undefined" ? `${window.location.origin}/shopee-callback` : "http://localhost:5173/shopee-callback";
-                navigator.clipboard.writeText(url);
-                setAppSaved(true);
-                setTimeout(() => setAppSaved(false), 2000);
-              }}
-              className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 text-xs font-semibold border border-slate-700 flex items-center gap-1.5 shrink-0 cursor-pointer transition-colors shadow-sm"
-              title="Sao chép Redirect URL"
-            >
-              <Globe size={13} className="text-brand-400" />
-              <span>Sao chép</span>
-            </button>
           </div>
-        </div>
 
-        {/* Webhook URL (Push Mechanism) */}
-        <div className="p-3.5 rounded-xl bg-slate-900/90 border border-slate-700/60 space-y-2">
-          <div className="flex items-center justify-between">
-            <label className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
-              <Server size={14} className="text-emerald-400" /> Webhook URL (Push Mechanism Callback URL)
+          {/* Partner Key */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center justify-between">
+              <span>Partner Key (Khóa bảo mật Secret) <span className="text-rose-400 font-bold">*</span></span>
+              <span className="text-[11px] font-normal text-slate-400">Chuỗi Hex SHA256</span>
             </label>
-            <span className="text-[11px] text-emerald-400 font-medium">Nhận sự kiện tự động</span>
+            <div className="relative">
+              <input
+                type={showKey ? "text" : "password"}
+                value={appConfig.partnerKey}
+                onChange={(e) => setAppConfig({ ...appConfig, partnerKey: e.target.value.trim() })}
+                placeholder="VD: 7461626364... (Secret Key)"
+                className="w-full px-3.5 py-2.5 pr-10 rounded-xl border border-slate-700/60 bg-slate-800/80 text-slate-100 text-xs font-mono outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500"
+              />
+              <button
+                type="button"
+                onClick={() => setShowKey(!showKey)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200"
+                title={showKey ? "Ẩn Key" : "Hiện Key"}
+              >
+                {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
           </div>
 
-          <p className="text-[11px] text-slate-400">
-            Dán vào mục <strong>Push Mechanism Callback URL</strong> trên Shopee Console để nhận webhook tự động (đơn hàng, cập nhật shop...):
-          </p>
+          {/* Environment */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+              Môi trường API (Environment)
+            </label>
+            <select
+              value={appConfig.environment}
+              onChange={(e) => setAppConfig({ ...appConfig, environment: e.target.value as "live" | "test" })}
+              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-700/60 bg-slate-800/80 text-slate-100 text-xs outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500 cursor-pointer"
+            >
+              <option value="live">Live / Production (Sàn thật Shopee Việt Nam)</option>
+              <option value="test">Test / Sandbox (Môi trường kiểm thử Shopee)</option>
+            </select>
+          </div>
 
-          <div className="flex gap-2">
-            <input
-              type="text"
-              readOnly
-              value={typeof window !== "undefined" ? `${window.location.origin}/api/shopee/webhook` : "http://localhost:5173/api/shopee/webhook"}
-              className="w-full px-3 py-2 rounded-xl bg-slate-950 text-slate-200 text-xs font-mono border border-slate-800 select-all outline-none"
-            />
+          {/* Redirect URL (Chỉ hiển thị để copy dán vào Shopee Console) */}
+          <div className="p-3.5 rounded-xl bg-slate-900/90 border border-slate-700/60 space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+                <Globe size={14} className="text-brand-400" /> Redirect URL (URL chuyển hướng khi ủy quyền OAuth2)
+              </label>
+              <span className="text-[11px] text-amber-400 font-medium">Tự động nhận diện</span>
+            </div>
+
+            <p className="text-[11px] text-slate-400">
+              Dán vào mục <strong>Redirect URL</strong> trên Shopee Console (<code>open.shopee.com</code>):
+            </p>
+
+            <div className="flex gap-2">
+              <input
+                type="text"
+                readOnly
+                value={typeof window !== "undefined" ? `${window.location.origin}/shopee-callback` : "http://localhost:5173/shopee-callback"}
+                className="w-full px-3 py-2 rounded-xl bg-slate-950 text-slate-200 text-xs font-mono border border-slate-800 select-all outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  const url = typeof window !== "undefined" ? `${window.location.origin}/shopee-callback` : "http://localhost:5173/shopee-callback";
+                  navigator.clipboard.writeText(url);
+                  setAppSaved(true);
+                  setTimeout(() => setAppSaved(false), 2000);
+                }}
+                className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 text-xs font-semibold border border-slate-700 flex items-center gap-1.5 shrink-0 cursor-pointer transition-colors shadow-sm"
+                title="Sao chép Redirect URL"
+              >
+                <Globe size={13} className="text-brand-400" />
+                <span>Sao chép</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Webhook URL (Push Mechanism) */}
+          <div className="p-3.5 rounded-xl bg-slate-900/90 border border-slate-700/60 space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+                <Server size={14} className="text-emerald-400" /> Webhook URL (Push Mechanism Callback URL)
+              </label>
+              <span className="text-[11px] text-emerald-400 font-medium">Nhận sự kiện tự động</span>
+            </div>
+
+            <p className="text-[11px] text-slate-400">
+              Dán vào mục <strong>Push Mechanism Callback URL</strong> trên Shopee Console để nhận webhook tự động (đơn hàng, cập nhật shop...):
+            </p>
+
+            <div className="flex gap-2">
+              <input
+                type="text"
+                readOnly
+                value={typeof window !== "undefined" ? `${window.location.origin}/api/shopee/webhook` : "http://localhost:5173/api/shopee/webhook"}
+                className="w-full px-3 py-2 rounded-xl bg-slate-950 text-slate-200 text-xs font-mono border border-slate-800 select-all outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  const url = typeof window !== "undefined" ? `${window.location.origin}/api/shopee/webhook` : "http://localhost:5173/api/shopee/webhook";
+                  navigator.clipboard.writeText(url);
+                  setAppSaved(true);
+                  setTimeout(() => setAppSaved(false), 2000);
+                }}
+                className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 text-xs font-semibold border border-slate-700 flex items-center gap-1.5 shrink-0 cursor-pointer transition-colors shadow-sm"
+                title="Sao chép Webhook URL"
+              >
+                <Server size={13} className="text-emerald-400" />
+                <span>Sao chép</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Actions */}
+          <div className="flex flex-wrap items-center gap-3 pt-2">
             <button
               type="button"
-              onClick={() => {
-                const url = typeof window !== "undefined" ? `${window.location.origin}/api/shopee/webhook` : "http://localhost:5173/api/shopee/webhook";
-                navigator.clipboard.writeText(url);
-                setAppSaved(true);
-                setTimeout(() => setAppSaved(false), 2000);
-              }}
-              className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 text-xs font-semibold border border-slate-700 flex items-center gap-1.5 shrink-0 cursor-pointer transition-colors shadow-sm"
-              title="Sao chép Webhook URL"
+              onClick={handleSaveAppConfig}
+              className="px-5 py-2.5 rounded-xl bg-brand-500 hover:bg-brand-600 text-white text-xs font-semibold shadow-lg shadow-brand-500/20 transition-all flex items-center gap-1.5"
             >
-              <Server size={13} className="text-emerald-400" />
-              <span>Sao chép</span>
+              {appSaved ? <Check size={15} /> : <Save size={15} />}
+              <span>{appSaved ? "Đã lưu cài đặt Partner App!" : "Lưu cài đặt Shopee"}</span>
             </button>
           </div>
         </div>
 
-        {/* Actions */}
-        <div className="flex flex-wrap items-center gap-3 pt-2">
-          <button
-            type="button"
-            onClick={handleSaveAppConfig}
-            className="px-5 py-2.5 rounded-xl bg-brand-500 hover:bg-brand-600 text-white text-xs font-semibold shadow-lg shadow-brand-500/20 transition-all flex items-center gap-1.5"
-          >
-            {appSaved ? <Check size={15} /> : <Save size={15} />}
-            <span>{appSaved ? "Đã lưu cài đặt Partner App!" : "Lưu cài đặt Shopee"}</span>
-          </button>
+        {/* Guide Box */}
+        <div className="p-4 rounded-xl bg-slate-900/60 border border-slate-800 space-y-2">
+          <h4 className="font-bold text-xs text-slate-200 flex items-center gap-1.5">
+            <HelpCircle size={15} className="text-brand-400" /> Hướng dẫn lấy Partner ID & Key:
+          </h4>
+          <ol className="list-decimal list-inside text-xs text-slate-400 space-y-1 leading-relaxed">
+            <li>Truy cập cổng nhà phát triển <a href="https://open.shopee.com" target="_blank" rel="noreferrer" className="text-orange-400 hover:underline">open.shopee.com</a>.</li>
+            <li>Tạo một <strong>Partner App</strong> (App Type: E-Commerce Solution / Shop Management).</li>
+            <li>Vào mục <strong>App Details</strong> để copy <strong>Partner ID</strong> và <strong>Partner Key</strong> dán vào form trên rồi bấm Lưu.</li>
+            <li>Sau đó, sang menu <strong>"Gian hàng Shopee"</strong> ở thanh bên trái để bấm ủy quyền kết nối các Shop.</li>
+          </ol>
         </div>
-      </div>
-
-      {/* Guide Box */}
-      <div className="p-4 rounded-xl bg-slate-900/60 border border-slate-800 space-y-2">
-        <h4 className="font-bold text-xs text-slate-200 flex items-center gap-1.5">
-          <HelpCircle size={15} className="text-brand-400" /> Hướng dẫn lấy Partner ID & Key:
-        </h4>
-        <ol className="list-decimal list-inside text-xs text-slate-400 space-y-1 leading-relaxed">
-          <li>Truy cập cổng nhà phát triển <a href="https://open.shopee.com" target="_blank" rel="noreferrer" className="text-orange-400 hover:underline">open.shopee.com</a>.</li>
-          <li>Tạo một <strong>Partner App</strong> (App Type: E-Commerce Solution / Shop Management).</li>
-          <li>Vào mục <strong>App Details</strong> để copy <strong>Partner ID</strong> và <strong>Partner Key</strong> dán vào form trên rồi bấm Lưu.</li>
-          <li>Sau đó, sang menu <strong>"Gian hàng Shopee"</strong> ở thanh bên trái để bấm ủy quyền kết nối các Shop.</li>
-        </ol>
       </div>
     </div>
   );

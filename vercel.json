@@ -1,4 +1,10 @@
 {
+  "crons": [
+    {
+      "path": "/api/shopee/proxy?action=cron_refresh",
+      "schedule": "0 */2 * * *"
+    }
+  ],
   "rewrites": [
     {
       "source": "/((?!api/.*).*)",

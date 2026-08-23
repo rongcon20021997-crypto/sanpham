@@ -287,9 +287,20 @@ export async function callUserManagement<T>(payload: Record<string, unknown>): P
   throw new Error("Action không hợp lệ");
 }
 
-export function formatColorName(colorCode: string | null | undefined): string {
-  if (!colorCode) return "Chưa xác định";
-  const code = colorCode.trim().toUpperCase();
+export function formatColorName(
+  colorCode: string | null | undefined,
+  customColors?: { code: string; name: string }[]
+): string {
+  if (!colorCode) return "Tiêu chuẩn";
+  const trimmed = colorCode.trim();
+  const upper = trimmed.toUpperCase();
+
+  if (customColors && Array.isArray(customColors)) {
+    const matched = customColors.find(
+      (c) => c.code.trim().toUpperCase() === upper || c.name.trim().toUpperCase() === upper
+    );
+    if (matched && matched.name) return matched.name;
+  }
 
   const colorMap: Record<string, string> = {
     D: "Đen",
@@ -314,10 +325,19 @@ export function formatColorName(colorCode: string | null | undefined): string {
     C: "Cam",
     ORANGE: "Cam",
     K: "Kem",
+    BE: "Be",
     BEIGE: "Kem",
     KM: "Khoai Môn",
+    XNV: "Xanh Navy",
+    NAVY: "Xanh Navy",
+    XB: "Xanh Bơ",
+    XN: "Xanh Nhạt",
+    BR: "Nâu",
+    BROWN: "Nâu",
+    TIÊU_CHUẨN: "Tiêu chuẩn",
+    DEFAULT: "Tiêu chuẩn",
   };
 
-  return colorMap[code] || colorCode;
+  return colorMap[upper] || trimmed;
 }
 

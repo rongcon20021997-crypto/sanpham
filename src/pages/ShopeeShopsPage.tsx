@@ -12,6 +12,7 @@ import {
   generateShopeeAuthUrl,
   exchangeShopeeAuthCode,
   refreshShopeeShopToken,
+  refreshAllShopeeTokens,
   testShopeeShopConnection,
   fetchShopeeLogisticsChannels,
   getShopeeDefaultLogisticsConfig,
@@ -19,11 +20,13 @@ import {
   saveShopeeDefaultLogisticsConfig,
   getShopeePresetCategories,
   fetchShopeePresetCategories,
+  fetchShopeeCategories,
   saveShopeePresetCategory,
   deleteShopeePresetCategory,
   setDefaultShopeePresetCategory,
-  fetchShopeeCategories,
   fetchShopeeCategoryAttributes,
+  SHOPEE_STANDARD_FASHION_ATTRIBUTES,
+  getDefaultFashionAttributes,
   type ShopeeAppConfig,
   type ShopeeShop,
   type ShopeeLogisticsChannel,
@@ -86,6 +89,7 @@ export function ShopeeShopsPage({ onNavigateToSettings }: ShopeeShopsPageProps) 
   const [appConfig, setAppConfig] = useState<ShopeeAppConfig>(getShopeeAppConfig());
   const [shops, setShops] = useState<ShopeeShop[]>(getShopeeShops());
   const [loading, setLoading] = useState(false);
+  const [refreshingAll, setRefreshingAll] = useState(false);
   const [activeTab, setActiveTab] = useState<"shops" | "logistics" | "categories" | "webhook-logs">("shops");
 
   // Logistics state
@@ -544,7 +548,29 @@ export function ShopeeShopsPage({ onNavigateToSettings }: ShopeeShopsPageProps) 
           subtitle="Quản lý danh sách các gian hàng Shopee đã kết nối, ủy quyền thêm shop và quản trị token"
         />
 
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={async () => {
+              setRefreshingAll(true);
+              try {
+                const res = await refreshAllShopeeTokens(true);
+                await refreshShopList();
+                showToast(`✅ Đã làm mới thành công ${res.refreshed}/${res.total} token Shopee!`);
+              } catch (err: any) {
+                alert(`Lỗi làm mới token: ${err.message}`);
+              } finally {
+                setRefreshingAll(false);
+              }
+            }}
+            disabled={refreshingAll || shops.length === 0}
+            className="px-3.5 py-2 rounded-xl bg-purple-950/80 hover:bg-purple-900 text-purple-200 border border-purple-800 text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
+            title="Tự động kiểm tra và làm mới token cho tất cả các shop (tương đương với Cronjob Supabase)"
+          >
+            <RefreshCw size={13} className={refreshingAll ? "animate-spin text-purple-400" : "text-purple-400"} />
+            <span>{refreshingAll ? "Đang làm mới token..." : "⚡ Làm mới tất cả Token"}</span>
+          </button>
+
           {onNavigateToSettings && (
             <button
               type="button"
@@ -1865,159 +1891,164 @@ export function ShopeeShopsPage({ onNavigateToSettings }: ShopeeShopsPageProps) 
               </div>
             </div>
 
-            {/* Cấu hình Thuộc tính mặc định (Attributes) */}
-            <div className="space-y-2.5 p-3.5 rounded-xl bg-slate-900/90 border border-slate-800">
-              <div className="flex items-center justify-between">
-                <label className="font-semibold text-slate-200 flex items-center gap-1.5">
-                  <Sliders size={15} className="text-purple-400" /> Thiết lập Thuộc tính Sản phẩm Mặc định
-                </label>
-                {loadingAttributes && (
-                  <span className="text-[11px] text-purple-400 flex items-center gap-1">
-                    <Loader2 size={12} className="animate-spin" /> Đang tải thuộc tính...
-                  </span>
-                )}
-              </div>
-              <p className="text-[11px] text-slate-400">
-                Các giá trị này sẽ tự động được gán khi bạn đồng bộ áo thun vào Shopee.
-              </p>
+            {/* THUỘC TÍNH SẢN PHẨM MẶC ĐỊNH (THÔNG TIN CHI TIẾT SHOPEE) */}
+            <div className="space-y-3 p-4 rounded-xl bg-slate-900/90 border border-slate-800">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <label className="font-bold text-slate-200 text-xs flex items-center gap-1.5">
+                    <Sliders size={15} className="text-purple-400" /> Thông tin chi tiết (Thuộc tính sản phẩm Shopee)
+                  </label>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    Điền các thuộc tính mẫu để khi đăng sản phẩm Shopee tự động gán đầy đủ, đạt chuẩn 100% hiển thị.
+                  </p>
+                </div>
 
-              {/* Dynamic or Custom Attributes Grid */}
+                <button
+                  type="button"
+                  onClick={() =>
+                    setEditingPreset((prev) => ({
+                      ...prev,
+                      attributes: {
+                        ...(prev.attributes || {}),
+                        ...getDefaultFashionAttributes(),
+                      },
+                    }))
+                  }
+                  className="px-2.5 py-1 rounded-lg bg-purple-950 hover:bg-purple-900 text-purple-300 border border-purple-800/80 text-[11px] font-semibold flex items-center gap-1 shrink-0 cursor-pointer self-start sm:self-auto transition-colors"
+                >
+                  <Sparkles size={12} />
+                  <span>Điền nhanh mẫu chuẩn Áo thun</span>
+                </button>
+              </div>
+
+              {/* Grid 12 Thuộc tính tiêu chuẩn Thời trang Shopee */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                {/* Thương hiệu */}
-                <div>
-                  <label className="block font-medium text-slate-300 mb-1">
-                    Thương hiệu (Brand)
-                  </label>
-                  <input
-                    type="text"
-                    value={editingPreset.attributes?.["Thương hiệu"] || "No Brand"}
-                    onChange={(e) =>
-                      setEditingPreset({
-                        ...editingPreset,
-                        attributes: { ...editingPreset.attributes, "Thương hiệu": e.target.value },
-                      })
-                    }
-                    placeholder="No Brand / Tên Brand của bạn"
-                    className="w-full px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-950 text-slate-100 text-xs outline-none focus:border-purple-500"
-                  />
-                </div>
+                {SHOPEE_STANDARD_FASHION_ATTRIBUTES.map((attr) => {
+                  const currentValue = editingPreset.attributes?.[attr.key] ?? "";
 
-                {/* Chất liệu */}
-                <div>
-                  <label className="block font-medium text-slate-300 mb-1">
-                    Chất liệu (Material)
-                  </label>
-                  <input
-                    type="text"
-                    value={editingPreset.attributes?.["Chất liệu"] || "Cotton 100%"}
-                    onChange={(e) =>
-                      setEditingPreset({
-                        ...editingPreset,
-                        attributes: { ...editingPreset.attributes, "Chất liệu": e.target.value },
-                      })
-                    }
-                    placeholder="VD: Cotton 100%, Cotton Compact 2C..."
-                    className="w-full px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-950 text-slate-100 text-xs outline-none focus:border-purple-500"
-                  />
-                </div>
+                  return (
+                    <div key={attr.key} className="space-y-1">
+                      <div className="flex items-center justify-between">
+                        <label className="block text-[11px] font-semibold text-slate-300">
+                          {attr.label}
+                        </label>
+                        {attr.key === "Thương hiệu" && (
+                          <span className="text-[10px] text-rose-400 font-bold">* Bắt buộc</span>
+                        )}
+                      </div>
 
-                {/* Xuất xứ */}
-                <div>
-                  <label className="block font-medium text-slate-300 mb-1">
-                    Xuất xứ (Origin)
-                  </label>
-                  <input
-                    type="text"
-                    value={editingPreset.attributes?.["Xuất xứ"] || "Việt Nam"}
-                    onChange={(e) =>
-                      setEditingPreset({
-                        ...editingPreset,
-                        attributes: { ...editingPreset.attributes, "Xuất xứ": e.target.value },
-                      })
-                    }
-                    placeholder="Việt Nam"
-                    className="w-full px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-950 text-slate-100 text-xs outline-none focus:border-purple-500"
-                  />
-                </div>
+                      <div className="flex items-center gap-1.5">
+                        <select
+                          value={attr.options.includes(currentValue) ? currentValue : currentValue ? "custom" : ""}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            if (val === "custom") return;
+                            setEditingPreset({
+                              ...editingPreset,
+                              attributes: {
+                                ...(editingPreset.attributes || {}),
+                                [attr.key]: val,
+                              },
+                            });
+                          }}
+                          className="flex-1 px-2.5 py-1.5 rounded-lg border border-slate-700 bg-slate-950 text-slate-200 text-xs outline-none focus:border-purple-500 cursor-pointer"
+                        >
+                          <option value="">-- Vui lòng chọn --</option>
+                          {attr.options.map((opt) => (
+                            <option key={opt} value={opt}>
+                              {opt}
+                            </option>
+                          ))}
+                          {!attr.options.includes(currentValue) && currentValue && (
+                            <option value="custom">Tự nhập: {currentValue}</option>
+                          )}
+                        </select>
 
-                {/* Phong cách */}
-                <div>
-                  <label className="block font-medium text-slate-300 mb-1">
-                    Phong cách (Style)
-                  </label>
-                  <input
-                    type="text"
-                    value={editingPreset.attributes?.["Phong cách"] || "Streetwear / Unisex"}
-                    onChange={(e) =>
-                      setEditingPreset({
-                        ...editingPreset,
-                        attributes: { ...editingPreset.attributes, "Phong cách": e.target.value },
-                      })
-                    }
-                    placeholder="Streetwear, Basic, Hàn Quốc, Cổ điển..."
-                    className="w-full px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-950 text-slate-100 text-xs outline-none focus:border-purple-500"
-                  />
-                </div>
+                        {/* Cho phép nhập giá trị riêng */}
+                        <input
+                          type="text"
+                          value={currentValue}
+                          onChange={(e) =>
+                            setEditingPreset({
+                              ...editingPreset,
+                              attributes: {
+                                ...(editingPreset.attributes || {}),
+                                [attr.key]: e.target.value,
+                              },
+                            })
+                          }
+                          placeholder="Hoặc tự nhập..."
+                          className="w-28 sm:w-32 px-2 py-1.5 rounded-lg border border-slate-700 bg-slate-950 text-slate-200 text-[11px] outline-none focus:border-purple-500"
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
 
-              {/* Shopee Category Attributes Loaded (if available) */}
+              {/* Shopee Category Attributes Loaded (if available from API) */}
               {categoryAttributes.length > 0 && (
                 <div className="pt-2 border-t border-slate-800/80 space-y-2">
                   <span className="text-[11px] font-bold text-purple-300 block">
-                    Các thuộc tính Shopee bổ sung cho ngành hàng này:
+                    Các thuộc tính Shopee khác theo ngành hàng API:
                   </span>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-40 overflow-y-auto p-1">
-                    {categoryAttributes.slice(0, 8).map((attr) => {
-                      const attrKey = attr.displayAttributeName || attr.originalAttributeName;
-                      const currentValue = editingPreset.attributes?.[attrKey] || "";
+                    {categoryAttributes
+                      .filter((attr) => {
+                        const attrKey = attr.displayAttributeName || attr.originalAttributeName;
+                        return !SHOPEE_STANDARD_FASHION_ATTRIBUTES.some((sa) => sa.key.toLowerCase() === attrKey.toLowerCase());
+                      })
+                      .map((attr) => {
+                        const attrKey = attr.displayAttributeName || attr.originalAttributeName;
+                        const currentValue = editingPreset.attributes?.[attrKey] || "";
 
-                      return (
-                        <div key={attr.attributeId}>
-                          <label className="block text-[11px] font-medium text-slate-400 mb-0.5 truncate" title={attrKey}>
-                            {attrKey} {attr.isMandatory && <span className="text-rose-400 font-bold">*</span>}
-                          </label>
+                        return (
+                          <div key={attr.attributeId}>
+                            <label className="block text-[11px] font-medium text-slate-400 mb-0.5 truncate" title={attrKey}>
+                              {attrKey} {attr.isMandatory && <span className="text-rose-400 font-bold">*</span>}
+                            </label>
 
-                          {attr.attributeValueList && attr.attributeValueList.length > 0 ? (
-                            <select
-                              value={currentValue}
-                              onChange={(e) =>
-                                setEditingPreset({
-                                  ...editingPreset,
-                                  attributes: {
-                                    ...editingPreset.attributes,
-                                    [attrKey]: e.target.value,
-                                  },
-                                })
-                              }
-                              className="w-full px-2.5 py-1.5 rounded-lg border border-slate-700 bg-slate-950 text-slate-200 text-xs outline-none focus:border-purple-500 cursor-pointer"
-                            >
-                              <option value="">-- Chọn {attrKey} --</option>
-                              {attr.attributeValueList.map((val) => (
-                                <option key={val.valueId} value={val.displayValueName || val.originalValueName}>
-                                  {val.displayValueName || val.originalValueName}
-                                </option>
-                              ))}
-                            </select>
-                          ) : (
-                            <input
-                              type="text"
-                              value={currentValue}
-                              onChange={(e) =>
-                                setEditingPreset({
-                                  ...editingPreset,
-                                  attributes: {
-                                    ...editingPreset.attributes,
-                                    [attrKey]: e.target.value,
-                                  },
-                                })
-                              }
-                              placeholder={`Nhập ${attrKey}`}
-                              className="w-full px-2.5 py-1.5 rounded-lg border border-slate-700 bg-slate-950 text-slate-200 text-xs outline-none focus:border-purple-500"
-                            />
-                          )}
-                        </div>
-                      );
-                    })}
+                            {attr.attributeValueList && attr.attributeValueList.length > 0 ? (
+                              <select
+                                value={currentValue}
+                                onChange={(e) =>
+                                  setEditingPreset({
+                                    ...editingPreset,
+                                    attributes: {
+                                      ...editingPreset.attributes,
+                                      [attrKey]: e.target.value,
+                                    },
+                                  })
+                                }
+                                className="w-full px-2.5 py-1.5 rounded-lg border border-slate-700 bg-slate-950 text-slate-200 text-xs outline-none focus:border-purple-500 cursor-pointer"
+                              >
+                                <option value="">-- Chọn {attrKey} --</option>
+                                {attr.attributeValueList.map((val) => (
+                                  <option key={val.valueId} value={val.displayValueName || val.originalValueName}>
+                                    {val.displayValueName || val.originalValueName}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              <input
+                                type="text"
+                                value={currentValue}
+                                onChange={(e) =>
+                                  setEditingPreset({
+                                    ...editingPreset,
+                                    attributes: {
+                                      ...editingPreset.attributes,
+                                      [attrKey]: e.target.value,
+                                    },
+                                  })
+                                }
+                                placeholder={`Nhập ${attrKey}`}
+                                className="w-full px-2.5 py-1.5 rounded-lg border border-slate-700 bg-slate-950 text-slate-200 text-xs outline-none focus:border-purple-500"
+                              />
+                            )}
+                          </div>
+                        );
+                      })}
                   </div>
                 </div>
               )}

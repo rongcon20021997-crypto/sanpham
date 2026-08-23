@@ -13,10 +13,15 @@ import {
   fetchShopeePublishedProducts,
   publishProductToShopeeComplete,
   deleteShopeePublishedProduct,
+  getShopeeSizeChartUrl,
+  fetchShopeeLogisticsChannels,
+  SHOPEE_STANDARD_FASHION_ATTRIBUTES,
+  getDefaultFashionAttributes,
   type ShopeeShop,
   type ShopeePresetCategory,
   type ShopeeDefaultLogisticsConfig,
   type ShopeePublishedProduct,
+  type ShopeeLogisticsChannel,
   type PublishShopeeProductInput,
 } from "@/lib/shopee";
 import { formatCurrency, formatColorName, uploadFile } from "@/lib/helpers";
@@ -53,6 +58,7 @@ import {
   Star,
   Plus,
   Upload,
+  Ruler,
 } from "lucide-react";
 
 interface MasterProductGroup {
@@ -100,14 +106,21 @@ export function ShopeePublishPage({ onNavigateToSettings }: { onNavigateToSettin
   // Form fields inside Modal
   const [targetShopId, setTargetShopId] = useState<string>("");
   const [targetCategoryId, setTargetCategoryId] = useState<number>(0);
+  const [targetAttributes, setTargetAttributes] = useState<Record<string, string>>({});
   const [targetItemName, setTargetItemName] = useState<string>("");
   const [targetDescription, setTargetDescription] = useState<string>("");
   const [targetImages, setTargetImages] = useState<string[]>([]);
+  const [targetSizeChartUrl, setTargetSizeChartUrl] = useState<string>("");
   const [newImageUrl, setNewImageUrl] = useState<string>("");
   const [targetWeight, setTargetWeight] = useState<number>(200); // 200g
   const [targetLength, setTargetLength] = useState<number>(20);
   const [targetWidth, setTargetWidth] = useState<number>(15);
   const [targetHeight, setTargetHeight] = useState<number>(5);
+
+  // Kênh vận chuyển trong Modal
+  const [availableChannels, setAvailableChannels] = useState<ShopeeLogisticsChannel[]>([]);
+  const [selectedChannelIds, setSelectedChannelIds] = useState<number[]>([]);
+  const [loadingChannels, setLoadingChannels] = useState<boolean>(false);
 
   // Variant models matrix inside modal
   const [selectedColors, setSelectedColors] = useState<string[]>([]);
@@ -285,9 +298,14 @@ export function ShopeePublishPage({ onNavigateToSettings }: { onNavigateToSettin
     const sId = activeShop ? activeShop.shopId : "";
     setTargetShopId(sId);
 
-    // Chọn danh mục mẫu mặc định
+    // Chọn danh mục mẫu mặc định & nạp thuộc tính mẫu
     const defaultPreset = presetCategories.find((p) => p.isDefault) || presetCategories[0];
     setTargetCategoryId(defaultPreset ? defaultPreset.categoryId : 0);
+    setTargetAttributes(
+      defaultPreset?.attributes && Object.keys(defaultPreset.attributes).length > 0
+        ? { ...defaultPreset.attributes }
+        : getDefaultFashionAttributes()
+    );
 
     // Tên & mô tả Shopee
     setTargetItemName(group.shopee_name || group.master_name);
@@ -308,16 +326,42 @@ export function ShopeePublishPage({ onNavigateToSettings }: { onNavigateToSettin
     setTargetImages(mediaImgs.slice(0, 9));
     setNewImageUrl("");
 
-    // Trọng lượng & đóng gói
-    setTargetWeight(logisticsConfig.packageWeight || 200);
-    setTargetLength(logisticsConfig.packageLength || 20);
-    setTargetWidth(logisticsConfig.packageWidth || 15);
-    setTargetHeight(logisticsConfig.packageHeight || 5);
+    // Trọng lượng & đóng gói từ cấu hình vận chuyển
+    const defaultWeightGram = Math.round(Number(logisticsConfig.defaultWeightKg || logisticsConfig.packageWeight || 0.2) * 1000);
+    setTargetWeight(defaultWeightGram > 0 ? defaultWeightGram : 200);
+    setTargetLength(logisticsConfig.defaultLengthCm || logisticsConfig.packageLength || 20);
+    setTargetWidth(logisticsConfig.defaultWidthCm || logisticsConfig.packageWidth || 15);
+    setTargetHeight(logisticsConfig.defaultHeightCm || logisticsConfig.packageHeight || 5);
 
-    // Danh sách màu & size
-    const availableColors = group.colors.length > 0 ? [...group.colors] : ["Tiêu chuẩn"];
+    // Nạp kênh vận chuyển
+    const initialSelectedIds = Array.isArray(logisticsConfig.selectedChannelIds) ? [...logisticsConfig.selectedChannelIds] : [];
+    setSelectedChannelIds(initialSelectedIds);
+
+    if (sId) {
+      setLoadingChannels(true);
+      fetchShopeeLogisticsChannels(sId)
+        .then((res) => {
+          if (res?.channels && Array.isArray(res.channels)) {
+            setAvailableChannels(res.channels);
+            if (initialSelectedIds.length === 0) {
+              // Mặc định chọn các kênh Nhanh/Tiết kiệm, tự động bỏ Hỏa tốc & Hàng cồng kềnh
+              const autoIds = res.channels
+                .filter((ch) => ch.enabled && !ch.channelName.toLowerCase().includes("hỏa tốc") && !ch.channelName.toLowerCase().includes("cồng kềnh"))
+                .map((ch) => ch.channelId);
+              setSelectedChannelIds(autoIds.length > 0 ? autoIds : res.channels.filter((c) => c.enabled).map((c) => c.channelId));
+            }
+          }
+        })
+        .catch((err) => console.warn("Lỗi tải logistics channels:", err))
+        .finally(() => setLoadingChannels(false));
+    }
+
+    // Danh sách màu & size: Tự động đổi mã màu (T, D, XNV...) sang tên tiếng Việt (Trắng, Đen, Xanh Navy...)
+    const availableColorNames = group.colors.length > 0
+      ? Array.from(new Set(group.colors.map((c) => formatColorName(c, allColors))))
+      : ["Tiêu chuẩn"];
     const availableSizes = group.sizes.length > 0 ? [...group.sizes] : ["Freesize"];
-    setSelectedColors(availableColors);
+    setSelectedColors(availableColorNames);
     setSelectedSizes(availableSizes);
 
     const blanksMap = new Map(blanks.map((b) => [b.id, b]));
@@ -332,21 +376,22 @@ export function ShopeePublishPage({ onNavigateToSettings }: { onNavigateToSettin
       enabled: boolean;
     }[] = [];
 
-    for (const c of availableColors) {
+    for (const cName of availableColorNames) {
       for (const s of availableSizes) {
         const variant = group.variants.find((v) => {
           const vb = v.blank_id ? blanksMap.get(v.blank_id) || v.blanks : v.blanks;
           const vColor = vb?.color || (v as any).color || "Tiêu chuẩn";
+          const vColorName = formatColorName(vColor, allColors);
           const vSize = vb?.size || (v as any).size || "Freesize";
-          return vColor === c && vSize === s;
+          return vColorName === cName && vSize === s;
         });
 
         models.push({
-          color: c,
+          color: cName,
           size: s,
           price: variant ? variant.price : group.minPrice || 120000,
           stock: (variant as any)?.inventory_quantity ? Number((variant as any).inventory_quantity) : 100,
-          sku: variant?.code || `${group.master_code}-${c}-${s}`,
+          sku: variant?.code || `${group.master_code}-${cName}-${s}`,
           enabled: true,
         });
       }
@@ -359,6 +404,27 @@ export function ShopeePublishPage({ onNavigateToSettings }: { onNavigateToSettin
   // Ref và hàm tải ảnh từ máy tính
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [uploadingImage, setUploadingImage] = useState(false);
+
+  // Ref và hàm tải ảnh Bảng quy đổi kích cỡ
+  const sizeChartInputRef = useRef<HTMLInputElement | null>(null);
+  const [uploadingSizeChart, setUploadingSizeChart] = useState(false);
+
+  async function handleSizeChartUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingSizeChart(true);
+    try {
+      const url = await uploadFile(file, "products/size-charts", `SIZE_CHART_${selectedGroup?.master_code || "PRODUCT"}`);
+      if (url) {
+        setTargetSizeChartUrl(url);
+      }
+    } catch (err: any) {
+      alert(`Lỗi tải ảnh bảng size: ${err.message || err}`);
+    } finally {
+      setUploadingSizeChart(false);
+      if (sizeChartInputRef.current) sizeChartInputRef.current.value = "";
+    }
+  }
 
   async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const files = e.target.files;
@@ -464,23 +530,40 @@ export function ShopeePublishPage({ onNavigateToSettings }: { onNavigateToSettin
       // Map color to mockup image (chỉ dùng hình đã ghép áo + hình in)
       const blanksMap = new Map(blanks.map((b) => [b.id, b]));
       const colorMockupMap: Record<string, string> = {};
-      for (const c of selectedColors) {
+      for (const cName of selectedColors) {
         const v = selectedGroup.variants.find((item) => {
           const vb = item.blank_id ? blanksMap.get(item.blank_id) || item.blanks : item.blanks;
-          const vColor = vb?.color || (item as any).color || "Tiêu chuẩn";
-          return vColor === c && (item.preview_url || item.mockup_url || item.image_url);
+          const vRawColor = vb?.color || (item as any).color || "Tiêu chuẩn";
+          const vColorName = formatColorName(vRawColor, allColors);
+          return (vColorName === cName || vRawColor === cName) && (item.preview_url || item.mockup_url || item.image_url);
         });
         if (v) {
-          colorMockupMap[c] = v.preview_url || v.mockup_url || v.image_url || "";
+          colorMockupMap[cName] = v.preview_url || v.mockup_url || v.image_url || "";
         }
       }
 
-      // Kênh vận chuyển
-      const enabledChannels = (logisticsConfig.channels || [])
-        .filter((ch) => ch.enabled)
-        .map((ch) => ({
+      // Kênh vận chuyển: Gửi danh sách toàn bộ các kênh, gán explicit enabled: true cho kênh đã tick và false cho kênh bỏ tick (như Hỏa Tốc)
+      let logisticInfoList: any[] = [];
+      if (availableChannels.length > 0) {
+        logisticInfoList = availableChannels.map((ch) => ({
           logistic_id: Number(ch.channelId),
+          enabled: selectedChannelIds.includes(Number(ch.channelId)),
+        }));
+      } else if (selectedChannelIds.length > 0) {
+        logisticInfoList = selectedChannelIds.map((id) => ({
+          logistic_id: Number(id),
           enabled: true,
+        }));
+      }
+
+      // Chuyển targetAttributes thành attribute_list Shopee
+      const attributeList = Object.entries(targetAttributes)
+        .filter(([_, val]) => val && String(val).trim())
+        .map(([key, val]) => ({
+          attribute_id: 0,
+          attribute_name: key,
+          attribute_value: String(val).trim(),
+          value_name: String(val).trim(),
         }));
 
       const input: PublishShopeeProductInput = {
@@ -490,7 +573,9 @@ export function ShopeePublishPage({ onNavigateToSettings }: { onNavigateToSettin
         itemName: targetItemName.trim(),
         description: targetDescription.trim(),
         categoryId: targetCategoryId,
+        attributeList: attributeList as any,
         images: validImages.length > 0 ? validImages.slice(0, 9) : selectedGroup.images.slice(0, 9),
+        sizeChartImage: (targetSizeChartUrl || getShopeeSizeChartUrl() || "").trim() || undefined,
         existingItemId: existingShopeeItemId.trim() ? Number(existingShopeeItemId.trim()) : undefined,
         colorMockupMap,
         weight: targetWeight / 1000, // Đổi sang kg
@@ -499,7 +584,7 @@ export function ShopeePublishPage({ onNavigateToSettings }: { onNavigateToSettin
           package_length: targetLength,
           package_width: targetWidth,
         },
-        logisticInfo: enabledChannels,
+        logisticInfo: logisticInfoList,
         colors: selectedColors,
         sizes: selectedSizes,
         models: enabledModels,
@@ -825,7 +910,14 @@ export function ShopeePublishPage({ onNavigateToSettings }: { onNavigateToSettin
                   </label>
                   <select
                     value={targetCategoryId}
-                    onChange={(e) => setTargetCategoryId(Number(e.target.value))}
+                    onChange={(e) => {
+                      const catId = Number(e.target.value);
+                      setTargetCategoryId(catId);
+                      const matched = presetCategories.find((p) => p.categoryId === catId);
+                      if (matched?.attributes && Object.keys(matched.attributes).length > 0) {
+                        setTargetAttributes({ ...matched.attributes });
+                      }
+                    }}
                     className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs focus:outline-none focus:border-orange-500 cursor-pointer"
                   >
                     {presetCategories.map((cat) => (
@@ -983,12 +1075,166 @@ export function ShopeePublishPage({ onNavigateToSettings }: { onNavigateToSettin
               </div>
             </div>
 
-            {/* 3. Tiêu đề & Mô tả chuẩn SEO Shopee */}
+            {/* 3. Bảng quy đổi kích cỡ (Size Chart) Shopee */}
+            <div className="p-4 rounded-2xl bg-slate-800/50 border border-slate-700/60 space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="font-bold text-xs text-slate-200 flex items-center gap-2">
+                  <Ruler size={15} className="text-amber-400" />
+                  <span>3. Bảng quy đổi kích cỡ (Size Chart Shopee)</span>
+                </h4>
+                <span className="text-[11px] text-slate-400">
+                  {targetSizeChartUrl ? "Đang chọn ảnh bảng size riêng" : "Sử dụng ảnh mặc định trong Cài đặt"}
+                </span>
+              </div>
+
+              {/* Ẩn file input size chart */}
+              <input
+                type="file"
+                ref={sizeChartInputRef}
+                accept="image/*"
+                onChange={handleSizeChartUpload}
+                className="hidden"
+              />
+
+              <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 bg-slate-900/80 p-3 rounded-xl border border-slate-700/60">
+                <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-xl bg-slate-950 border border-slate-700 overflow-hidden flex items-center justify-center relative group shrink-0">
+                  {targetSizeChartUrl ? (
+                    <>
+                      <img src={targetSizeChartUrl} alt="Size Chart" className="w-full h-full object-contain p-1" />
+                      <div className="absolute inset-0 bg-slate-950/75 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => window.open(targetSizeChartUrl, "_blank")}
+                          className="p-1.5 rounded-lg bg-slate-800 text-slate-200 hover:text-white"
+                          title="Xem ảnh lớn"
+                        >
+                          <Eye size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setTargetSizeChartUrl("")}
+                          className="p-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white"
+                          title="Xóa ảnh riêng (sử dụng ảnh mặc định cài đặt)"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="flex flex-col items-center justify-center p-2 text-center text-slate-500">
+                      <Ruler size={24} className="opacity-40 mb-1 text-amber-400" />
+                      <span className="text-[9px]">Chưa chọn ảnh</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex-1 space-y-2">
+                  <p className="text-xs text-slate-300">
+                    Ảnh Bảng quy đổi kích cỡ sẽ được tải trực tiếp lên Shopee Media Space để người mua xem chọn size chuẩn.
+                  </p>
+                  
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => sizeChartInputRef.current?.click()}
+                      disabled={uploadingSizeChart}
+                      className="px-3.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold flex items-center gap-1.5 shadow cursor-pointer disabled:opacity-50 transition-all"
+                    >
+                      {uploadingSizeChart ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+                      <span>{uploadingSizeChart ? "Đang tải ảnh..." : targetSizeChartUrl ? "Thay đổi ảnh bảng size" : "Tải ảnh bảng size riêng"}</span>
+                    </button>
+
+                    {targetSizeChartUrl && (
+                      <button
+                        type="button"
+                        onClick={() => setTargetSizeChartUrl(getShopeeSizeChartUrl())}
+                        className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold border border-slate-700 flex items-center gap-1 cursor-pointer transition-colors"
+                        title="Khôi phục ảnh bảng size mặc định trong Cài đặt"
+                      >
+                        <RotateCcw size={12} />
+                        <span>Dùng ảnh mặc định Cài đặt</span>
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-slate-400">
+                    💡 Bạn có thể tải lên 1 ảnh bảng size dùng chung cho tất cả sản phẩm trong <strong>Cài đặt &gt; Kết nối Shopee</strong> hoặc <strong>Cài đặt &gt; Size</strong>.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* 4. Thông tin chi tiết (Thuộc tính sản phẩm Shopee) */}
+            <div className="p-4 rounded-2xl bg-slate-800/50 border border-slate-700/60 space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <h4 className="font-bold text-xs text-slate-200 flex items-center gap-2">
+                  <Sliders size={15} className="text-pink-400" />
+                  <span>4. Thông tin chi tiết (Thuộc tính sản phẩm Shopee)</span>
+                </h4>
+
+                <button
+                  type="button"
+                  onClick={() => setTargetAttributes(getDefaultFashionAttributes())}
+                  className="px-2.5 py-1 rounded-lg bg-pink-950/80 hover:bg-pink-900 text-pink-300 border border-pink-800/80 text-[11px] font-semibold flex items-center gap-1 shrink-0 cursor-pointer self-start sm:self-auto transition-colors"
+                >
+                  <Sparkles size={12} />
+                  <span>Mẫu chuẩn Áo thun</span>
+                </button>
+              </div>
+
+              <p className="text-[11px] text-slate-400">
+                Thuộc tính được tự động nạp từ cấu hình mẫu danh mục để sản phẩm đạt chuẩn hiển thị 100% trên sàn Shopee.
+              </p>
+
+              {/* Grid 12 Thuộc tính chuẩn */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5 pt-1">
+                {SHOPEE_STANDARD_FASHION_ATTRIBUTES.map((attr) => {
+                  const currentValue = targetAttributes[attr.key] ?? "";
+
+                  return (
+                    <div key={attr.key} className="space-y-1">
+                      <label className="block text-[11px] font-medium text-slate-300 truncate" title={attr.label}>
+                        {attr.label} {attr.key === "Thương hiệu" && <span className="text-rose-400 font-bold">*</span>}
+                      </label>
+                      <div className="flex items-center gap-1">
+                        <select
+                          value={attr.options.includes(currentValue) ? currentValue : currentValue ? "custom" : ""}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            if (val === "custom") return;
+                            setTargetAttributes((prev) => ({ ...prev, [attr.key]: val }));
+                          }}
+                          className="flex-1 px-2 py-1.5 rounded-lg border border-slate-700 bg-slate-900 text-slate-200 text-xs outline-none focus:border-pink-500 cursor-pointer"
+                        >
+                          <option value="">-- Chọn --</option>
+                          {attr.options.map((opt) => (
+                            <option key={opt} value={opt}>
+                              {opt}
+                            </option>
+                          ))}
+                          {!attr.options.includes(currentValue) && currentValue && (
+                            <option value="custom">Khác: {currentValue}</option>
+                          )}
+                        </select>
+                        <input
+                          type="text"
+                          value={currentValue}
+                          onChange={(e) => setTargetAttributes((prev) => ({ ...prev, [attr.key]: e.target.value }))}
+                          placeholder="Hoặc tự nhập..."
+                          className="w-24 px-1.5 py-1.5 rounded-lg border border-slate-700 bg-slate-900 text-slate-200 text-[11px] outline-none focus:border-pink-500"
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* 5. Tiêu đề & Mô tả chuẩn SEO Shopee */}
             <div className="p-4 rounded-2xl bg-slate-800/50 border border-slate-700/60 space-y-3">
               <div className="flex items-center justify-between">
                 <h4 className="font-bold text-xs text-slate-200 flex items-center gap-2">
                   <Tag size={15} className="text-purple-400" />
-                  <span>3. Tiêu đề & Mô tả Sản phẩm Shopee</span>
+                  <span>5. Tiêu đề & Mô tả Sản phẩm Shopee</span>
                 </h4>
                 <span className="text-[11px] text-slate-400">
                   {targetItemName.length}/120 ký tự
@@ -1023,12 +1269,12 @@ export function ShopeePublishPage({ onNavigateToSettings }: { onNavigateToSettin
               </div>
             </div>
 
-            {/* 4. Bảng phân loại 2 tầng: Màu sắc x Size */}
+            {/* 6. Bảng phân loại 2 tầng: Màu sắc x Size */}
             <div className="p-4 rounded-2xl bg-slate-800/50 border border-slate-700/60 space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <h4 className="font-bold text-xs text-slate-200 flex items-center gap-2">
                   <Layers size={15} className="text-emerald-400" />
-                  <span>4. Bảng Biến Thể 2 Tầng (Màu sắc x Size)</span>
+                  <span>6. Bảng Biến Thể 2 Tầng (Màu sắc x Kích cỡ)</span>
                 </h4>
 
                 {/* Công cụ sửa giá/kho nhanh hàng loạt */}
@@ -1061,28 +1307,29 @@ export function ShopeePublishPage({ onNavigateToSettings }: { onNavigateToSettin
               <div className="space-y-1.5">
                 <p className="text-[11px] text-slate-400">Hình ảnh mockup từng màu (hình đã ghép thiết kế):</p>
                 <div className="flex flex-wrap gap-2">
-                  {selectedColors.map((color) => {
+                  {selectedColors.map((colorName) => {
                     const variant = selectedGroup.variants.find((v) => {
                       const vb = v.blank_id ? blanks.find((b) => b.id === v.blank_id) || v.blanks : v.blanks;
-                      const vColor = vb?.color || (v as any).color || "Tiêu chuẩn";
-                      return vColor === color && (v.preview_url || v.mockup_url || v.image_url);
+                      const vRawColor = vb?.color || (v as any).color || "Tiêu chuẩn";
+                      const vColorName = formatColorName(vRawColor, allColors);
+                      return (vColorName === colorName || vRawColor === colorName) && (v.preview_url || v.mockup_url || v.image_url);
                     });
                     const imgUrl = variant?.preview_url || variant?.mockup_url || variant?.image_url || selectedGroup.images[0];
 
                     return (
                       <div
-                        key={color}
+                        key={colorName}
                         className="flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-slate-900 border border-slate-700"
                       >
                         <div className="w-8 h-8 rounded-lg overflow-hidden bg-slate-950 shrink-0 border border-slate-800">
                           {imgUrl ? (
-                            <img src={imgUrl} alt={color} className="w-full h-full object-cover" />
+                            <img src={imgUrl} alt={colorName} className="w-full h-full object-cover" />
                           ) : (
                             <ImageIcon size={16} className="m-auto text-slate-600" />
                           )}
                         </div>
                         <span className="text-xs font-semibold text-slate-200">
-                          {formatColorName(color, allColors)}
+                          {formatColorName(colorName, allColors)}
                         </span>
                       </div>
                     );
@@ -1166,58 +1413,174 @@ export function ShopeePublishPage({ onNavigateToSettings }: { onNavigateToSettin
               </div>
             </div>
 
-            {/* 5. Cấu hình Vận chuyển & Kiện hàng */}
-            <div className="p-4 rounded-2xl bg-slate-800/50 border border-slate-700/60 space-y-3">
-              <h4 className="font-bold text-xs text-slate-200 flex items-center gap-2">
-                <Truck size={15} className="text-blue-400" />
-                <span>5. Thông số Đóng gói & Vận chuyển</span>
-              </h4>
+            {/* 7. Cấu hình Vận chuyển & Kiện hàng */}
+            <div className="p-4 rounded-2xl bg-slate-800/50 border border-slate-700/60 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <h4 className="font-bold text-xs text-slate-200 flex items-center gap-2">
+                  <Truck size={15} className="text-blue-400" />
+                  <span>7. Thông số Đóng gói & Kênh Vận chuyển Shopee</span>
+                </h4>
+                <span className="text-[11px] text-slate-400">
+                  Đã bật {selectedChannelIds.length} / {availableChannels.length || "tất cả"} kênh
+                </span>
+              </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              {/* Thông số kích thước & cân nặng */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-3 rounded-xl bg-slate-900/80 border border-slate-800">
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                    Cân nặng (Gram)
+                    Cân nặng (Gram) *
                   </label>
                   <input
                     type="number"
                     value={targetWeight}
                     onChange={(e) => setTargetWeight(Number(e.target.value))}
-                    className="w-full px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs font-mono"
+                    className="w-full px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-700 text-slate-200 text-xs font-mono"
                   />
                 </div>
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                    Dài (cm)
+                    Dài (cm) *
                   </label>
                   <input
                     type="number"
                     value={targetLength}
                     onChange={(e) => setTargetLength(Number(e.target.value))}
-                    className="w-full px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs font-mono"
+                    className="w-full px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-700 text-slate-200 text-xs font-mono"
                   />
                 </div>
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                    Rộng (cm)
+                    Rộng (cm) *
                   </label>
                   <input
                     type="number"
                     value={targetWidth}
                     onChange={(e) => setTargetWidth(Number(e.target.value))}
-                    className="w-full px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs font-mono"
+                    className="w-full px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-700 text-slate-200 text-xs font-mono"
                   />
                 </div>
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                    Cao (cm)
+                    Cao (cm) *
                   </label>
                   <input
                     type="number"
                     value={targetHeight}
                     onChange={(e) => setTargetHeight(Number(e.target.value))}
-                    className="w-full px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs font-mono"
+                    className="w-full px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-700 text-slate-200 text-xs font-mono"
                   />
                 </div>
+              </div>
+
+              {/* Danh sách Kênh Vận Chuyển */}
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-[11px] font-semibold text-slate-300 flex items-center gap-1.5">
+                    Chọn các kênh vận chuyển kích hoạt cho sản phẩm này:
+                  </span>
+                  
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const standardIds = availableChannels
+                          .filter((c) => !c.channelName.toLowerCase().includes("hỏa tốc") && !c.channelName.toLowerCase().includes("cồng kềnh"))
+                          .map((c) => c.channelId);
+                        setSelectedChannelIds(standardIds);
+                      }}
+                      className="px-2 py-1 rounded-lg bg-blue-950/80 hover:bg-blue-900 text-blue-300 border border-blue-800 text-[10px] font-semibold flex items-center gap-1 cursor-pointer"
+                    >
+                      <Sparkles size={11} />
+                      <span>Chuẩn Áo thun (Tắt Hỏa tốc & Cồng kềnh)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedChannelIds(availableChannels.map((c) => c.channelId))}
+                      className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 text-[10px] font-semibold cursor-pointer"
+                    >
+                      Bật tất cả
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedChannelIds([])}
+                      className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-400 border border-slate-700 text-[10px] font-semibold cursor-pointer"
+                    >
+                      Tắt hết
+                    </button>
+                  </div>
+                </div>
+
+                {loadingChannels ? (
+                  <div className="p-4 text-center text-xs text-slate-400 flex items-center justify-center gap-2">
+                    <Loader2 size={14} className="animate-spin text-blue-400" />
+                    <span>Đang tải danh sách kênh vận chuyển của Shop...</span>
+                  </div>
+                ) : availableChannels.length === 0 ? (
+                  <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800 text-[11px] text-slate-400">
+                    Sẽ áp dụng theo cấu hình vận chuyển đã lưu trong Cài đặt hoặc kênh mặc định của Shop.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 pt-1">
+                    {availableChannels.map((ch) => {
+                      const isChecked = selectedChannelIds.includes(ch.channelId);
+                      const isHoaToc = ch.channelName.toLowerCase().includes("hỏa tốc");
+                      const isCongKenh = ch.channelName.toLowerCase().includes("cồng kềnh");
+
+                      return (
+                        <label
+                          key={ch.channelId}
+                          className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 cursor-pointer transition-all ${
+                            isChecked
+                              ? "bg-slate-900/90 border-blue-500/50 shadow-sm"
+                              : "bg-slate-950/40 border-slate-800/80 opacity-50 hover:opacity-80"
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 overflow-hidden">
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setSelectedChannelIds((prev) => [...prev, ch.channelId]);
+                                } else {
+                                  setSelectedChannelIds((prev) => prev.filter((id) => id !== ch.channelId));
+                                }
+                              }}
+                              className="rounded text-blue-500 focus:ring-0 cursor-pointer"
+                            />
+                            <div className="truncate">
+                              <span className="block text-xs font-semibold text-slate-200 truncate">
+                                {ch.channelName}
+                              </span>
+                              <span className="text-[10px] text-slate-500 font-mono">
+                                Tối đa {ch.maxWeight}kg
+                              </span>
+                            </div>
+                          </div>
+
+                          {isHoaToc ? (
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/20 text-amber-300 shrink-0">
+                              Hỏa tốc
+                            </span>
+                          ) : isCongKenh ? (
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-purple-500/20 text-purple-300 shrink-0">
+                              Cồng kềnh
+                            </span>
+                          ) : isChecked ? (
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-500/20 text-emerald-300 shrink-0">
+                              Bật
+                            </span>
+                          ) : (
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-slate-800 text-slate-500 shrink-0">
+                              Tắt
+                            </span>
+                          )}
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             </div>
 

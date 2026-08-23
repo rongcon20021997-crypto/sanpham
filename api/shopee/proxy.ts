@@ -216,6 +216,75 @@ export default async function handler(req: any, res: any) {
       });
     }
 
+    // 2.5 ACTION: TỰ ĐỘNG LÀM MỚI TẤT CẢ TOKEN HẾT HẠN (CRONJOB REFRESH ALL)
+    if (action === "cron_refresh" || action === "refresh_all_tokens") {
+      const { data: shops } = await supabase
+        .from("shopee_shops")
+        .select("id, shop_id, shop_name, refresh_token, token_expires_at")
+        .not("refresh_token", "is", null);
+
+      const results: any[] = [];
+      const now = Date.now();
+      const threshold = 2.5 * 60 * 60 * 1000; // 2.5 hours
+
+      for (const s of shops || []) {
+        const expiresAt = Number(s.token_expires_at || 0);
+        const isExpiring = !expiresAt || expiresAt - now < threshold || body.force;
+
+        if (!isExpiring) {
+          results.push({ shopId: s.shop_id, shopName: s.shop_name, status: "skipped" });
+          continue;
+        }
+
+        try {
+          const apiPath = "/api/v2/auth/access_token/get";
+          const timestamp = Math.floor(Date.now() / 1000);
+          const sign = generateShopeeSignature(partnerId, partnerKey, apiPath, timestamp);
+          const url = `${host}${apiPath}?partner_id=${Number(partnerId)}&timestamp=${timestamp}&sign=${sign}`;
+
+          const refreshRes = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              partner_id: Number(partnerId),
+              shop_id: Number(s.shop_id),
+              refresh_token: s.refresh_token,
+            }),
+          });
+
+          const refreshData = await safeFetchJson(refreshRes);
+          if (refreshData.access_token) {
+            const newAcc = refreshData.access_token;
+            const newRef = refreshData.refresh_token || s.refresh_token;
+            const expIn = refreshData.expire_in || 14400;
+            const newExp = Date.now() + expIn * 1000;
+
+            await supabase.from("shopee_shops").update({
+              access_token: newAcc,
+              refresh_token: newRef,
+              token_expires_at: newExp,
+              status: "connected",
+              updated_at: new Date().toISOString(),
+            }).eq("id", s.id);
+
+            results.push({ shopId: s.shop_id, shopName: s.shop_name, status: "success", expiresAt: newExp });
+          } else {
+            results.push({ shopId: s.shop_id, shopName: s.shop_name, status: "failed", error: refreshData.message || refreshData.error });
+          }
+        } catch (e: any) {
+          results.push({ shopId: s.shop_id, shopName: s.shop_name, status: "error", error: e.message });
+        }
+      }
+
+      return res.status(200).json({
+        success: true,
+        timestamp: new Date().toISOString(),
+        total: shops?.length || 0,
+        refreshed: results.filter((r) => r.status === "success").length,
+        results,
+      });
+    }
+
     // 3. ACTION: KIỂM TRA KẾT NỐI (TEST CONNECTION)
     if (action === "test_connection") {
       const shopId = String(body.shop_id || body.shopId || "").trim();
@@ -529,26 +598,51 @@ export default async function handler(req: any, res: any) {
         },
       ];
 
-      let logisticInfo = body.logistic_info || [];
-      // Nếu chưa có kênh vận chuyển, tự động kéo danh sách kênh vận chuyển đã bật của Shop
-      if (!Array.isArray(logisticInfo) || logisticInfo.length === 0) {
-        try {
-          const logApiPath = "/api/v2/logistics/get_channel_list";
-          const logTimestamp = Math.floor(Date.now() / 1000);
-          const logSign = generateShopeeSignature(partnerId, partnerKey, logApiPath, logTimestamp, accessToken, shopId);
-          const logUrl = `${host}${logApiPath}?partner_id=${Number(partnerId)}&timestamp=${logTimestamp}&access_token=${accessToken}&shop_id=${Number(shopId)}&sign=${logSign}`;
-          const logRes = await fetch(logUrl);
-          const logData = await safeFetchJson(logRes);
-          const rawChannels = logData.response?.logistics_channel_list || [];
+      let logisticInfo: any[] = [];
+      const userProvidedList = Array.isArray(body.logistic_info) ? body.logistic_info : [];
+
+      try {
+        const logApiPath = "/api/v2/logistics/get_channel_list";
+        const logTimestamp = Math.floor(Date.now() / 1000);
+        const logSign = generateShopeeSignature(partnerId, partnerKey, logApiPath, logTimestamp, accessToken, shopId);
+        const logUrl = `${host}${logApiPath}?partner_id=${Number(partnerId)}&timestamp=${logTimestamp}&access_token=${accessToken}&shop_id=${Number(shopId)}&sign=${logSign}`;
+        const logRes = await fetch(logUrl);
+        const logData = await safeFetchJson(logRes);
+        const rawChannels = logData.response?.logistics_channel_list || [];
+
+        if (userProvidedList.length > 0) {
+          const userMap = new Map<number, boolean>();
+          for (const item of userProvidedList) {
+            const chId = Number(item.logistic_id || item.channel_id || item.channelId);
+            if (chId) {
+              userMap.set(chId, Boolean(item.enabled));
+            }
+          }
+
+          if (rawChannels.length > 0) {
+            logisticInfo = rawChannels.map((ch: any) => {
+              const chId = Number(ch.logistics_channel_id);
+              // Nếu người dùng đã chọn / bỏ chọn thì lấy theo cấu hình người dùng, ngược lại mặc định false nếu không được chọn
+              const isEnabled = userMap.has(chId) ? userMap.get(chId)! : false;
+              return {
+                logistic_id: chId,
+                enabled: isEnabled,
+              };
+            });
+          } else {
+            logisticInfo = userProvidedList;
+          }
+        } else if (rawChannels.length > 0) {
           logisticInfo = rawChannels
             .filter((ch: any) => ch.enabled || ch.force_enable)
             .map((ch: any) => ({
               logistic_id: ch.logistics_channel_id,
               enabled: true,
             }));
-        } catch (logErr) {
-          console.warn("Không thể tự động kéo logistics:", logErr);
         }
+      } catch (logErr) {
+        console.warn("Không thể đồng bộ logistics channels:", logErr);
+        if (userProvidedList.length > 0) logisticInfo = userProvidedList;
       }
 
       const imageIdList = body.image?.image_id_list || body.image_id_list || [];

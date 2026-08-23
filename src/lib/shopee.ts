@@ -4,12 +4,14 @@
  */
 
 import { supabase } from "@/lib/supabase";
+import { formatColorName } from "@/lib/helpers";
 
 export interface ShopeeAppConfig {
   partnerId: string;
   partnerKey: string;
   environment: "live" | "test";
   redirectUrl: string;
+  sizeChartUrl?: string;
 }
 
 export interface ShopeeShop {
@@ -29,6 +31,7 @@ export interface ShopeeShop {
 
 const STORAGE_KEY_SHOPEE_APP = "sanpham_shopee_app_config_v2";
 const STORAGE_KEY_SHOPEE_SHOPS = "sanpham_shopee_shops_v2";
+export const STORAGE_KEY_SHOPEE_SIZE_CHART = "sanpham_shopee_size_chart_url";
 
 export function getCurrentRedirectUrl(): string {
   if (typeof window !== "undefined" && window.location.origin) {
@@ -49,7 +52,35 @@ export const DEFAULT_SHOPEE_APP_CONFIG: ShopeeAppConfig = {
   partnerKey: "",
   environment: "live",
   redirectUrl: "",
+  sizeChartUrl: "",
 };
+
+/**
+ * Lấy cấu hình URL ảnh Bảng quy đổi kích cỡ Shopee
+ */
+export function getShopeeSizeChartUrl(): string {
+  if (typeof window === "undefined") return "";
+  return localStorage.getItem(STORAGE_KEY_SHOPEE_SIZE_CHART) || "";
+}
+
+/**
+ * Lưu URL ảnh Bảng quy đổi kích cỡ Shopee vào LocalStorage và Supabase
+ */
+export async function setShopeeSizeChartUrl(url: string): Promise<void> {
+  const cleanUrl = url ? url.trim() : "";
+  if (typeof window !== "undefined") {
+    localStorage.setItem(STORAGE_KEY_SHOPEE_SIZE_CHART, cleanUrl);
+  }
+  try {
+    await supabase.from("shopee_app_configs").upsert({
+      id: 1,
+      size_chart_url: cleanUrl,
+      updated_at: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.warn("Lỗi lưu Size Chart URL lên Supabase:", err);
+  }
+}
 
 /**
  * Lấy cấu hình Partner App Shopee (Đọc nhanh từ LocalStorage)
@@ -58,8 +89,9 @@ export function getShopeeAppConfig(): ShopeeAppConfig {
   if (typeof window === "undefined") return DEFAULT_SHOPEE_APP_CONFIG;
   try {
     const raw = localStorage.getItem(STORAGE_KEY_SHOPEE_APP);
-    if (!raw) return DEFAULT_SHOPEE_APP_CONFIG;
-    return { ...DEFAULT_SHOPEE_APP_CONFIG, ...JSON.parse(raw) };
+    const sizeChart = getShopeeSizeChartUrl();
+    if (!raw) return { ...DEFAULT_SHOPEE_APP_CONFIG, sizeChartUrl: sizeChart };
+    return { ...DEFAULT_SHOPEE_APP_CONFIG, ...JSON.parse(raw), sizeChartUrl: sizeChart || JSON.parse(raw).sizeChartUrl || "" };
   } catch (err) {
     console.error("Lỗi đọc App Config Shopee:", err);
     return DEFAULT_SHOPEE_APP_CONFIG;
@@ -82,13 +114,19 @@ export async function fetchShopeeAppConfig(): Promise<ShopeeAppConfig> {
       return local;
     }
 
+    const sizeChart = data.size_chart_url || local.sizeChartUrl || getShopeeSizeChartUrl() || "";
+
     const fetched: ShopeeAppConfig = {
       partnerId: data.partner_id || "",
       partnerKey: data.partner_key || "",
       environment: (data.environment as "live" | "test") || "live",
       redirectUrl: data.redirect_url || local.redirectUrl || DEFAULT_SHOPEE_APP_CONFIG.redirectUrl,
+      sizeChartUrl: sizeChart,
     };
 
+    if (sizeChart) {
+      localStorage.setItem(STORAGE_KEY_SHOPEE_SIZE_CHART, sizeChart);
+    }
     localStorage.setItem(STORAGE_KEY_SHOPEE_APP, JSON.stringify(fetched));
     return fetched;
   } catch (err) {
@@ -106,15 +144,19 @@ export async function setShopeeAppConfig(config: Partial<ShopeeAppConfig>): Prom
   
   if (typeof window !== "undefined") {
     localStorage.setItem(STORAGE_KEY_SHOPEE_APP, JSON.stringify(updated));
+    if (updated.sizeChartUrl !== undefined) {
+      localStorage.setItem(STORAGE_KEY_SHOPEE_SIZE_CHART, updated.sizeChartUrl);
+    }
   }
 
   try {
     await supabase.from("shopee_app_configs").upsert({
       id: 1,
-      partner_id: updated.partnerId.trim(),
-      partner_key: updated.partnerKey.trim(),
+      partner_id: (updated.partnerId || "").trim(),
+      partner_key: (updated.partnerKey || "").trim(),
       environment: updated.environment,
-      redirect_url: updated.redirectUrl.trim(),
+      redirect_url: (updated.redirectUrl || "").trim(),
+      size_chart_url: (updated.sizeChartUrl || "").trim(),
       updated_at: new Date().toISOString(),
     });
   } catch (err) {
@@ -637,6 +679,54 @@ export async function refreshShopeeShopToken(shopIdOrInternalId: string): Promis
 }
 
 /**
+ * Tự động làm mới tất cả các token Shopee sắp hết hạn (hoặc gọi qua proxy cronjob)
+ */
+export async function refreshAllShopeeTokens(force: boolean = false): Promise<{
+  total: number;
+  refreshed: number;
+  results: any[];
+}> {
+  try {
+    const res = await fetch("/api/shopee/proxy?action=cron_refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ force }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      // Đồng bộ lại local shops
+      await fetchShopeeShops();
+      return data;
+    }
+  } catch (err) {
+    console.warn("Proxy cron_refresh error, falling back to direct shop iteration:", err);
+  }
+
+  // Fallback nếu chạy local không qua serverless
+  const shops = getShopeeShops();
+  const results: any[] = [];
+  let refreshed = 0;
+  const now = Date.now();
+  const threshold = 2.5 * 60 * 60 * 1000;
+
+  for (const shop of shops) {
+    if (!shop.refreshToken) continue;
+    const isExpiring = !shop.tokenExpiresAt || shop.tokenExpiresAt - now < threshold || force;
+    if (isExpiring) {
+      try {
+        await refreshShopeeShopToken(shop.id);
+        refreshed++;
+        results.push({ shopId: shop.shopId, status: "success" });
+      } catch (err: any) {
+        results.push({ shopId: shop.shopId, status: "error", error: err.message });
+      }
+    }
+  }
+
+  return { total: shops.length, refreshed, results };
+}
+
+/**
  * Kiểm tra kết nối tới một Shop cụ thể và cập nhật trạng thái
  */
 export async function testShopeeShopConnection(shopIdOrInternalId: string): Promise<{
@@ -1015,6 +1105,94 @@ export interface ShopeePresetCategory {
   note?: string; // Ghi chú thêm
   createdAt: string;
   updatedAt: string;
+}
+
+export const SHOPEE_STANDARD_FASHION_ATTRIBUTES: {
+  key: string;
+  label: string;
+  options: string[];
+  defaultValue: string;
+}[] = [
+  {
+    key: "Thương hiệu",
+    label: "Thương hiệu",
+    defaultValue: "No brand",
+    options: ["No brand", "OEM", "Khác"],
+  },
+  {
+    key: "Xuất xứ",
+    label: "Xuất xứ",
+    defaultValue: "Việt Nam",
+    options: ["Việt Nam", "Trong nước", "Nhập khẩu", "Trung Quốc", "Hàn Quốc", "Thái Lan", "Khác"],
+  },
+  {
+    key: "Chất liệu",
+    label: "Chất liệu",
+    defaultValue: "Cotton",
+    options: ["Cotton", "Thun cotton", "Cotton 100%", "Cotton Compact 2C", "Polyester", "Spandex", "Nỉ", "Lụa", "Khác"],
+  },
+  {
+    key: "Cropped Top",
+    label: "Cropped Top",
+    defaultValue: "Không",
+    options: ["Không", "Có"],
+  },
+  {
+    key: "Cổ áo",
+    label: "Cổ áo",
+    defaultValue: "Cổ tròn",
+    options: ["Cổ tròn", "Cổ V", "Cổ bẻ", "Cổ polo", "Cổ tim", "Cổ lọ", "Cổ thuyền", "Khác"],
+  },
+  {
+    key: "Dịp",
+    label: "Dịp",
+    defaultValue: "Hàng ngày",
+    options: ["Hàng ngày", "Thường ngày", "Dạo phố", "Đi chơi", "Thể thao", "Công sở", "Tiệc tùng", "Khác"],
+  },
+  {
+    key: "Petite",
+    label: "Petite",
+    defaultValue: "Không",
+    options: ["Không", "Có"],
+  },
+  {
+    key: "Mẫu",
+    label: "Mẫu",
+    defaultValue: "In hình",
+    options: ["In hình", "Trơn", "Chữ", "Họa tiết", "Sọc / Kẻ", "Graphic", "Khác"],
+  },
+  {
+    key: "Mùa",
+    label: "Mùa",
+    defaultValue: "Bốn mùa",
+    options: ["Bốn mùa", "Mùa hè", "Mùa thu", "Mùa đông", "Mùa xuân"],
+  },
+  {
+    key: "Chiều dài tay áo",
+    label: "Chiều dài tay áo",
+    defaultValue: "Tay ngắn",
+    options: ["Tay ngắn", "Tay lỡ", "Tay dài", "Không tay", "Tay lửng", "Khác"],
+  },
+  {
+    key: "Phong cách",
+    label: "Phong cách",
+    defaultValue: "Đường phố",
+    options: ["Đường phố", "Cơ bản", "Hàn Quốc", "Tối giản", "Unisex", "Cổ điển", "Thể thao", "Retro", "Khác"],
+  },
+  {
+    key: "Chiều dài áo",
+    label: "Chiều dài áo",
+    defaultValue: "Tiêu chuẩn",
+    options: ["Tiêu chuẩn", "Dài vừa", "Dáng dài", "Dáng ngắn", "Oversize", "Khác"],
+  },
+];
+
+export function getDefaultFashionAttributes(): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const item of SHOPEE_STANDARD_FASHION_ATTRIBUTES) {
+    result[item.key] = item.defaultValue;
+  }
+  return result;
 }
 
 const STORAGE_KEY_SHOPEE_CATEGORIES_PRESETS = "sanpham_shopee_preset_categories_v1";
@@ -1779,15 +1957,17 @@ export async function publishProductToShopeeComplete(
   const colorImageIdMap: Record<string, string> = {};
   if (input.colorMockupMap) {
     for (const color of input.colors) {
-      const colUrl = input.colorMockupMap[color];
+      const formattedColor = formatColorName(color);
+      const colUrl = input.colorMockupMap[color] || input.colorMockupMap[formattedColor];
       if (colUrl) {
         try {
           const colUpRes = await uploadShopeeMediaImage(input.shopId, colUrl, "normal");
           if (colUpRes.imageId) {
             colorImageIdMap[color] = colUpRes.imageId;
+            colorImageIdMap[formattedColor] = colUpRes.imageId;
           }
         } catch (colErr) {
-          console.warn(`Lỗi upload ảnh màu ${color}:`, colErr);
+          console.warn(`Lỗi upload ảnh màu ${color} (${formattedColor}):`, colErr);
         }
       }
     }
@@ -1798,23 +1978,23 @@ export async function publishProductToShopeeComplete(
   // Default base price
   const basePrice = input.models.length > 0 ? Math.min(...input.models.map((m) => m.price)) : 100000;
 
-  // Tự động tạo ảnh bảng kích cỡ chuẩn Shopee bằng Canvas
+  // Tải ảnh Bảng quy đổi kích cỡ chuẩn Shopee (Ưu tiên ảnh người dùng chọn hoặc ảnh đã cấu hình trong Cài đặt)
   let sizeChartImageId = "";
-  if (input.sizeChartImage) {
-    // Nếu người dùng đã cung cấp ảnh bảng kích cỡ riêng
+  const sizeChartToUse = (input.sizeChartImage || getShopeeSizeChartUrl() || "").trim();
+  if (sizeChartToUse) {
     try {
-      const scRes = await uploadShopeeMediaImage(input.shopId, input.sizeChartImage, "normal");
+      const scRes = await uploadShopeeMediaImage(input.shopId, sizeChartToUse, "size_chart");
       if (scRes.imageId) sizeChartImageId = scRes.imageId;
     } catch (scErr) {
-      console.warn("Lỗi upload size chart image:", scErr);
+      console.warn("Lỗi upload custom size chart image lên Shopee Media:", scErr);
     }
   }
 
   if (!sizeChartImageId) {
-    // Tự động sinh ảnh bảng kích cỡ chuẩn (Size Chart) bằng Canvas
+    // Tự động sinh ảnh bảng kích cỡ chuẩn (Size Chart) bằng Canvas nếu không có ảnh tùy chỉnh
     try {
       const sizeChartBase64 = generateSizeChartImage(input.sizes);
-      const scRes = await uploadShopeeMediaImage(input.shopId, sizeChartBase64, "normal");
+      const scRes = await uploadShopeeMediaImage(input.shopId, sizeChartBase64, "size_chart");
       if (scRes.imageId) sizeChartImageId = scRes.imageId;
     } catch (scGenErr) {
       console.warn("Lỗi tạo/upload size chart tự động:", scGenErr);
@@ -1886,16 +2066,22 @@ export async function publishProductToShopeeComplete(
   if (input.colors.length > 0 && input.sizes.length > 0) {
     onProgress?.("3/3 Đang khởi tạo bảng phân loại Màu sắc x Size trên Shopee...", 80);
 
+    const formattedColors = input.colors.map((c) => formatColorName(c));
+
     const tierVariation: ShopeeTierVariation[] = [
       {
         name: "Màu sắc",
-        option_list: input.colors.map((c) => ({
-          option: c,
-          image: colorImageIdMap[c] ? { image_id: colorImageIdMap[c] } : undefined,
-        })),
+        option_list: formattedColors.map((colorName, idx) => {
+          const rawColor = input.colors[idx];
+          const imgId = colorImageIdMap[colorName] || colorImageIdMap[rawColor];
+          return {
+            option: colorName,
+            image: imgId ? { image_id: imgId } : undefined,
+          };
+        }),
       },
       {
-        name: "Size",
+        name: "Kích cỡ",
         option_list: input.sizes.map((s) => ({
           option: s,
         })),
@@ -1904,10 +2090,15 @@ export async function publishProductToShopeeComplete(
 
     const modelList: ShopeeModelItem[] = [];
     for (let cIdx = 0; cIdx < input.colors.length; cIdx++) {
-      const colorName = input.colors[cIdx];
+      const rawColor = input.colors[cIdx];
+      const colorName = formattedColors[cIdx];
       for (let sIdx = 0; sIdx < input.sizes.length; sIdx++) {
         const sizeName = input.sizes[sIdx];
-        const matchModel = input.models.find((m) => m.color === colorName && m.size === sizeName);
+        const matchModel = input.models.find(
+          (m) =>
+            (m.color === colorName || m.color === rawColor || formatColorName(m.color) === colorName) &&
+            m.size === sizeName
+        );
         const stockVal = matchModel ? matchModel.stock : 100;
         modelList.push({
           tier_index: [cIdx, sIdx],
