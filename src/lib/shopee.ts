@@ -1609,6 +1609,103 @@ export interface ShopeePublishedProduct {
   updated_at?: string;
 }
 
+/**
+ * Kéo thông tin chi tiết một sản phẩm thực tế từ Shopee (Category ID, Thuộc tính, Brand, Kích thước...)
+ */
+export async function fetchShopeeItemDetail(shopId: string, itemId: number | string): Promise<{
+  itemId: number;
+  categoryId: number;
+  itemName: string;
+  description: string;
+  brandName?: string;
+  attributes: Record<string, string>;
+  weight?: number;
+  dimension?: { package_height: number; package_length: number; package_width: number };
+}> {
+  const cleanItemId = Number(String(itemId).replace(/\D/g, ""));
+  if (!cleanItemId) {
+    throw new Error("Mã Shopee Item ID không hợp lệ.");
+  }
+
+  const res = await fetch(`/api/shopee/proxy?action=get_item_base_info`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      shop_id: shopId,
+      item_id: cleanItemId,
+    }),
+  });
+
+  const data = await res.json();
+  if (!res.ok || data.error) {
+    throw new Error(data.error || "Không thể lấy thông tin sản phẩm từ Shopee.");
+  }
+
+  const item = (data.itemList && data.itemList[0]) || (data.response?.item_list && data.response.item_list[0]);
+  if (!item) {
+    throw new Error(`Không tìm thấy sản phẩm #${cleanItemId} trên Shopee.`);
+  }
+
+  const categoryId = Number(item.category_id || 0);
+  const itemName = String(item.item_name || "");
+  const description = String(item.description || "");
+  const weight = Number(item.weight || 0);
+  const dimension = item.dimension;
+
+  const attributes: Record<string, string> = {};
+
+  // 1. Thương hiệu
+  const brandName = item.brand?.original_brand_name || item.brand?.display_brand_name || "NoBrand";
+  if (brandName) {
+    attributes["Thương hiệu"] = brandName;
+  }
+
+  // 2. Map các thuộc tính từ attribute_list của Shopee
+  const rawAttrs = item.attribute_list || [];
+  for (const a of rawAttrs) {
+    const origName = String(a.original_attribute_name || "").trim();
+    const dispName = String(a.display_attribute_name || a.original_attribute_name || "").trim();
+
+    let valStr = "";
+    if (Array.isArray(a.attribute_value_list) && a.attribute_value_list.length > 0) {
+      valStr = String(a.attribute_value_list[0].display_value_name || a.attribute_value_list[0].original_value_name || "").trim();
+    } else if (a.attribute_value) {
+      valStr = String(a.attribute_value).trim();
+    }
+
+    if (valStr) {
+      let matchedLabel = dispName || origName;
+      const lower = (dispName + " " + origName).toLowerCase();
+
+      if (lower.includes("chất liệu") || lower.includes("material") || lower.includes("fabric")) matchedLabel = "Chất liệu";
+      else if (lower.includes("xuất xứ") || lower.includes("origin")) matchedLabel = "Xuất xứ";
+      else if (lower.includes("cổ áo") || lower.includes("neckline") || lower.includes("collar")) matchedLabel = "Cổ áo";
+      else if (lower.includes("dịp") || lower.includes("occasion")) matchedLabel = "Dịp";
+      else if (lower.includes("mẫu") || lower.includes("pattern") || lower.includes("họa tiết")) matchedLabel = "Mẫu";
+      else if (lower.includes("mùa") || lower.includes("season")) matchedLabel = "Mùa";
+      else if (lower.includes("tay áo") || lower.includes("sleeve")) matchedLabel = "Chiều dài tay áo";
+      else if (lower.includes("phong cách") || lower.includes("style")) matchedLabel = "Phong cách";
+      else if (lower.includes("croptop") || lower.includes("cropped")) matchedLabel = "Cropped Top";
+      else if (lower.includes("petite")) matchedLabel = "Petite";
+      else if (lower.includes("chiều dài áo") || lower.includes("top length")) matchedLabel = "Chiều dài áo";
+      else if (lower.includes("thương hiệu") || lower.includes("brand")) matchedLabel = "Thương hiệu";
+
+      attributes[matchedLabel] = valStr;
+    }
+  }
+
+  return {
+    itemId: cleanItemId,
+    categoryId,
+    itemName,
+    description,
+    brandName,
+    attributes,
+    weight,
+    dimension,
+  };
+}
+
 export async function fetchShopeePublishedProducts(): Promise<ShopeePublishedProduct[]> {
   try {
     const { data, error } = await supabase
@@ -2028,6 +2125,13 @@ export async function publishProductToShopeeComplete(
     });
 
     const updateData = await updateRes.json();
+    console.log("🔍 [DEBUG] update_item response:", JSON.stringify(updateData, null, 2));
+    if (updateData._attrDebug) {
+      console.log("🔍 [DEBUG] Attribute Debug Info:", JSON.stringify(updateData._attrDebug, null, 2));
+    }
+    if (updateData._payloadSent) {
+      console.log("🔍 [DEBUG] Payload Sent to Shopee:", JSON.stringify(updateData._payloadSent, null, 2));
+    }
     if (!updateRes.ok || updateData.error) {
       throw new Error(updateData.error || "Lỗi cập nhật sản phẩm trên Shopee.");
     }

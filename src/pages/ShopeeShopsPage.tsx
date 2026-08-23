@@ -25,6 +25,7 @@ import {
   deleteShopeePresetCategory,
   setDefaultShopeePresetCategory,
   fetchShopeeCategoryAttributes,
+  fetchShopeeItemDetail,
   SHOPEE_STANDARD_FASHION_ATTRIBUTES,
   getDefaultFashionAttributes,
   type ShopeeAppConfig,
@@ -38,6 +39,7 @@ import {
 import {
   Store,
   Plus,
+  Download,
   Link2,
   ExternalLink,
   ShieldCheck,
@@ -120,6 +122,8 @@ export function ShopeeShopsPage({ onNavigateToSettings }: ShopeeShopsPageProps) 
   const [loadingAttributes, setLoadingAttributes] = useState(false);
   const [modalCatSearch, setModalCatSearch] = useState("");
   const [savingPreset, setSavingPreset] = useState(false);
+  const [cloneItemId, setCloneItemId] = useState("");
+  const [loadingCloneItem, setLoadingCloneItem] = useState(false);
 
   // Webhook logs state
   const [webhookLogs, setWebhookLogs] = useState<WebhookLog[]>([]);
@@ -314,6 +318,60 @@ export function ShopeeShopsPage({ onNavigateToSettings }: ShopeeShopsPageProps) 
       alert(`Lỗi lưu danh mục: ${err.message}`);
     } finally {
       setSavingPreset(false);
+    }
+  }
+
+  async function handleCloneFromShopeeItem(itemIdToClone?: string) {
+    const rawId = (itemIdToClone || cloneItemId || "").trim();
+    if (!rawId) {
+      alert("Vui lòng nhập Mã sản phẩm (Shopee Item ID) hoặc link Shopee.");
+      return;
+    }
+
+    const shopToUse = selectedCategoryShopId || defaultShop?.shopId || shops[0]?.shopId;
+    if (!shopToUse) {
+      alert("Chưa có gian hàng Shopee nào được kết nối.");
+      return;
+    }
+
+    setLoadingCloneItem(true);
+    try {
+      const itemDetail = await fetchShopeeItemDetail(shopToUse, rawId);
+
+      // Cập nhật form Preset
+      setEditingPreset((prev) => {
+        const catPath = shopeeCategories.find((c) => c.categoryId === itemDetail.categoryId)?.categoryNamePath || prev.categoryNamePath || `Ngành hàng #${itemDetail.categoryId}`;
+        return {
+          ...prev,
+          name: prev.name?.trim() ? prev.name : `Mẫu từ SP #${itemDetail.itemId} (${itemDetail.itemName ? itemDetail.itemName.slice(0, 30) + '...' : 'Shopee'})`,
+          categoryId: itemDetail.categoryId,
+          categoryNamePath: catPath,
+          attributes: {
+            ...(prev.attributes || {}),
+            ...itemDetail.attributes,
+          },
+        };
+      });
+
+      // Tải lại thuộc tính của category nếu có
+      if (itemDetail.categoryId) {
+        setLoadingAttributes(true);
+        try {
+          const targetShopId = selectedCategoryShopId || defaultShop?.shopId;
+          const res = await fetchShopeeCategoryAttributes(itemDetail.categoryId, targetShopId);
+          setCategoryAttributes(res.attributes);
+        } catch (err) {
+          console.warn("Lỗi tải thuộc tính:", err);
+        } finally {
+          setLoadingAttributes(false);
+        }
+      }
+
+      showToast(`✅ Đã kéo thành công ${Object.keys(itemDetail.attributes).length} thuộc tính từ SP #${itemDetail.itemId}!`);
+    } catch (err: any) {
+      alert(`Lỗi kéo thông tin sản phẩm từ Shopee: ${err.message}`);
+    } finally {
+      setLoadingCloneItem(false);
     }
   }
 
@@ -1492,6 +1550,19 @@ export function ShopeeShopsPage({ onNavigateToSettings }: ShopeeShopsPageProps) 
 
                 <button
                   type="button"
+                  onClick={() => {
+                    openCreatePresetModal();
+                    setCloneItemId("");
+                  }}
+                  className="px-3.5 py-2 rounded-xl bg-purple-950/80 hover:bg-purple-900 text-purple-200 text-xs font-semibold border border-purple-800 flex items-center gap-1.5 cursor-pointer shadow-sm"
+                  title="Nhập Shopee Item ID để tự động kéo toàn bộ thuộc tính và danh mục của một sản phẩm mẫu về lưu"
+                >
+                  <Download size={13} className="text-purple-400" />
+                  <span>📥 Kéo mẫu từ SP Shopee</span>
+                </button>
+
+                <button
+                  type="button"
                   onClick={openCreatePresetModal}
                   className="px-4 py-2 rounded-xl bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700 text-white text-xs font-bold shadow-lg shadow-purple-500/20 flex items-center gap-1.5 transition-all cursor-pointer"
                 >
@@ -1798,6 +1869,44 @@ export function ShopeeShopsPage({ onNavigateToSettings }: ShopeeShopsPageProps) 
           size="lg"
         >
           <div className="space-y-4 text-xs">
+            {/* Kéo mẫu cấu hình từ 1 sản phẩm thực tế trên Shopee */}
+            <div className="p-3.5 rounded-xl bg-gradient-to-r from-purple-950/50 via-indigo-950/40 to-slate-900 border border-purple-800/50 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-bold text-purple-300 flex items-center gap-1.5 text-xs">
+                  <Download size={14} className="text-purple-400" />
+                  Kéo mẫu cấu hình từ 1 Sản phẩm thực tế trên Shopee
+                </span>
+                <span className="text-[10px] text-slate-400">Tự động trích xuất Ngành hàng & Thuộc tính</span>
+              </div>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={cloneItemId}
+                  onChange={(e) => setCloneItemId(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleCloneFromShopeeItem();
+                    }
+                  }}
+                  placeholder="Dán link sản phẩm Shopee hoặc nhập Shopee Item ID (VD: 24589123456)..."
+                  className="flex-1 px-3 py-2 rounded-lg border border-purple-700/60 bg-slate-950 text-slate-200 text-xs outline-none focus:border-purple-400 placeholder:text-slate-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => handleCloneFromShopeeItem()}
+                  disabled={loadingCloneItem || !cloneItemId.trim()}
+                  className="px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs inline-flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50 shrink-0 shadow-sm"
+                >
+                  <RefreshCw size={13} className={loadingCloneItem ? "animate-spin" : ""} />
+                  <span>{loadingCloneItem ? "Đang kéo..." : "📥 Kéo về mẫu"}</span>
+                </button>
+              </div>
+              <p className="text-[11px] text-purple-300/80">
+                💡 <strong>Mẹo:</strong> Nhập mã Item ID của sản phẩm mẫu bạn vừa thiết lập trên Shopee Seller Center. Hệ thống sẽ tự động quét và điền 100% tất cả thuộc tính (Chất liệu, Cổ áo, Dịp, Xuất xứ, v.v.) vào mẫu lưu này!
+              </p>
+            </div>
+
             {/* Tên Preset */}
             <div>
               <label className="block font-semibold text-slate-300 mb-1">

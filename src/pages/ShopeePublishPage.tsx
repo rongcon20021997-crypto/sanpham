@@ -300,7 +300,8 @@ export function ShopeePublishPage({ onNavigateToSettings }: { onNavigateToSettin
 
     // Chọn danh mục mẫu mặc định & nạp thuộc tính mẫu
     const defaultPreset = presetCategories.find((p) => p.isDefault) || presetCategories[0];
-    setTargetCategoryId(defaultPreset ? defaultPreset.categoryId : 0);
+    const initialCatId = defaultPreset?.categoryId || 100017;
+    setTargetCategoryId(initialCatId);
     setTargetAttributes(
       defaultPreset?.attributes && Object.keys(defaultPreset.attributes).length > 0
         ? { ...defaultPreset.attributes }
@@ -920,6 +921,9 @@ export function ShopeePublishPage({ onNavigateToSettings }: { onNavigateToSettin
                     }}
                     className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs focus:outline-none focus:border-orange-500 cursor-pointer"
                   >
+                    {presetCategories.length === 0 && (
+                      <option value={100017}>Thời trang Nam &gt; Áo thun (Mặc định #100017)</option>
+                    )}
                     {presetCategories.map((cat) => (
                       <option key={cat.id} value={cat.categoryId}>
                         {cat.name} ({cat.categoryNamePath || `ID: ${cat.categoryId}`})
