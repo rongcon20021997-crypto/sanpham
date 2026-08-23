@@ -439,6 +439,428 @@ export default async function handler(req: any, res: any) {
       });
     }
 
+    // 7. ACTION: TẢI ẢNH LÊN SHOPEE MEDIA SPACE (UPLOAD IMAGE - PUBLIC API)
+    if (action === "upload_image" || action === "upload_media_image") {
+      const imageUrl = String(body.image_url || body.imageUrl || "").trim();
+      const imageBase64 = String(body.image_base64 || body.imageBase64 || "").trim();
+      const scene = String(body.scene || req.query.scene || "normal").trim();
+
+      if (!imageUrl && !imageBase64) {
+        return res.status(400).json({ error: "Thiếu image_url hoặc image_base64 để tải lên." });
+      }
+
+      // Lấy Buffer ảnh
+      let fileBuffer: Buffer;
+      let contentType = "image/jpeg";
+
+      if (imageBase64) {
+        const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, "");
+        fileBuffer = Buffer.from(cleanBase64, "base64");
+      } else {
+        const imgFetchRes = await fetch(imageUrl);
+        if (!imgFetchRes.ok) {
+          return res.status(400).json({ error: `Không thể tải ảnh nguồn từ: ${imageUrl} (Status: ${imgFetchRes.status})` });
+        }
+        const arrayBuf = await imgFetchRes.arrayBuffer();
+        fileBuffer = Buffer.from(arrayBuf);
+        contentType = imgFetchRes.headers.get("content-type") || "image/jpeg";
+      }
+
+      const apiPath = "/api/v2/media_space/upload_image";
+      const timestamp = Math.floor(Date.now() / 1000);
+      
+      // Shopee Media Space là Public API (chỉ cần partner_id, timestamp, sign)
+      const sign = generateShopeeSignature(partnerId, partnerKey, apiPath, timestamp);
+      const url = `${host}${apiPath}?partner_id=${Number(partnerId)}&timestamp=${timestamp}&sign=${sign}`;
+
+      // Tạo FormData multipart upload
+      const formData = new FormData();
+      const blob = new Blob([fileBuffer], { type: contentType });
+      formData.append("image", blob, "image.jpg");
+      if (scene) {
+        formData.append("scene", scene);
+      }
+
+      const uploadRes = await fetch(url, {
+        method: "POST",
+        body: formData,
+      });
+
+      const uploadData = await safeFetchJson(uploadRes);
+
+      if (uploadData.error) {
+        return res.status(400).json({
+          error: uploadData.message || uploadData.error,
+          detail: uploadData,
+        });
+      }
+
+      const imageInfo = uploadData.response?.image_info || {};
+      return res.status(200).json({
+        success: true,
+        imageId: imageInfo.image_id,
+        imageUrlList: imageInfo.image_url_list || [],
+      });
+    }
+
+    // 8. ACTION: TẠO SẢN PHẨM SHOPEE CƠ BẢN (ADD ITEM)
+    if (action === "add_item" || action === "create_product") {
+      let shopId = String(body.shop_id || body.shopId || req.query.shop_id || "").trim();
+      let accessToken = String(body.access_token || body.accessToken || "").trim();
+
+      const { data: shops } = await supabase.from("shopee_shops").select("*");
+      let shop = shopId
+        ? shops?.find((s: any) => String(s.shop_id) === shopId)
+        : shops?.find((s: any) => s.is_default) || shops?.[0];
+
+      if (shop) {
+        shopId = String(shop.shop_id);
+        accessToken = shop.access_token;
+      }
+
+      if (!shopId || !accessToken) {
+        return res.status(400).json({ error: "Thiếu shop_id hoặc access_token để tạo sản phẩm Shopee." });
+      }
+
+      const baseStockVal = Number(body.normal_stock || body.stock || 100);
+      const sellerStock = body.seller_stock || [
+        {
+          stock: baseStockVal,
+        },
+      ];
+
+      let logisticInfo = body.logistic_info || [];
+      // Nếu chưa có kênh vận chuyển, tự động kéo danh sách kênh vận chuyển đã bật của Shop
+      if (!Array.isArray(logisticInfo) || logisticInfo.length === 0) {
+        try {
+          const logApiPath = "/api/v2/logistics/get_channel_list";
+          const logTimestamp = Math.floor(Date.now() / 1000);
+          const logSign = generateShopeeSignature(partnerId, partnerKey, logApiPath, logTimestamp, accessToken, shopId);
+          const logUrl = `${host}${logApiPath}?partner_id=${Number(partnerId)}&timestamp=${logTimestamp}&access_token=${accessToken}&shop_id=${Number(shopId)}&sign=${logSign}`;
+          const logRes = await fetch(logUrl);
+          const logData = await safeFetchJson(logRes);
+          const rawChannels = logData.response?.logistics_channel_list || [];
+          logisticInfo = rawChannels
+            .filter((ch: any) => ch.enabled || ch.force_enable)
+            .map((ch: any) => ({
+              logistic_id: ch.logistics_channel_id,
+              enabled: true,
+            }));
+        } catch (logErr) {
+          console.warn("Không thể tự động kéo logistics:", logErr);
+        }
+      }
+
+      const imageIdList = body.image?.image_id_list || body.image_id_list || [];
+      const sizeChartId = String(body.size_chart || body.sizeChart || "").trim();
+
+      const payload: any = {
+        original_price: Number(body.original_price || body.price || 0),
+        description: String(body.description || "").trim(),
+        weight: Number(body.weight || 0.2),
+        item_name: String(body.item_name || body.name || "").trim(),
+        item_status: body.item_status || "NORMAL",
+        dimension: {
+          package_height: Number(body.dimension?.package_height || body.package_height || 5),
+          package_length: Number(body.dimension?.package_length || body.package_length || 20),
+          package_width: Number(body.dimension?.package_width || body.package_width || 15),
+        },
+        logistic_info: logisticInfo,
+        category_id: Number(body.category_id || body.categoryId),
+        image: {
+          image_id_list: imageIdList,
+        },
+        brand: body.brand || {
+          brand_id: 0,
+          original_brand_name: "NoBrand",
+        },
+        attribute_list: body.attribute_list || [],
+        item_sku: String(body.item_sku || body.master_code || "").trim(),
+        seller_stock: sellerStock,
+      };
+
+      // Gắn size_chart_info nếu có ảnh bảng kích cỡ
+      if (sizeChartId) {
+        payload.size_chart_info = {
+          size_chart: sizeChartId,
+        };
+      }
+
+      const apiPath = "/api/v2/product/add_item";
+      let timestamp = Math.floor(Date.now() / 1000);
+      let sign = generateShopeeSignature(partnerId, partnerKey, apiPath, timestamp, accessToken, shopId);
+      let url = `${host}${apiPath}?partner_id=${Number(partnerId)}&timestamp=${timestamp}&access_token=${accessToken}&shop_id=${Number(shopId)}&sign=${sign}`;
+
+      let addItemRes = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      let addItemData = await safeFetchJson(addItemRes);
+
+      // Nếu token hết hạn, tự động refresh token và thử lại
+      if (
+        addItemData.error &&
+        (addItemData.error.includes("access_token") ||
+          addItemData.message?.includes("access_token") ||
+          addItemData.error === "error_auth") &&
+        shop?.refresh_token
+      ) {
+        console.info("⚡ [Shopee Auto-Refresh]: Token hết hạn, đang tự động làm mới...");
+        try {
+          const refreshApiPath = "/api/v2/auth/access_token/get";
+          const refTimestamp = Math.floor(Date.now() / 1000);
+          const refSign = generateShopeeSignature(partnerId, partnerKey, refreshApiPath, refTimestamp);
+          const refUrl = `${host}${refreshApiPath}?partner_id=${partnerId}&timestamp=${refTimestamp}&sign=${refSign}`;
+
+          const refRes = await fetch(refUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              refresh_token: shop.refresh_token,
+              partner_id: Number(partnerId),
+              shop_id: Number(shopId),
+            }),
+          });
+          const refData = await safeFetchJson(refRes);
+          if (refData.access_token) {
+            accessToken = refData.access_token;
+            await supabase.from("shopee_shops").update({
+              access_token: refData.access_token,
+              refresh_token: refData.refresh_token,
+              token_expires_at: Date.now() + (refData.expire_in || 14400) * 1000,
+              updated_at: new Date().toISOString(),
+            }).eq("shop_id", shopId);
+
+            // Thử lại add_item với token mới
+            timestamp = Math.floor(Date.now() / 1000);
+            sign = generateShopeeSignature(partnerId, partnerKey, apiPath, timestamp, accessToken, shopId);
+            url = `${host}${apiPath}?partner_id=${Number(partnerId)}&timestamp=${timestamp}&access_token=${accessToken}&shop_id=${Number(shopId)}&sign=${sign}`;
+
+            addItemRes = await fetch(url, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            });
+            addItemData = await safeFetchJson(addItemRes);
+          }
+        } catch (rfErr) {
+          console.warn("Lỗi auto-refresh token:", rfErr);
+        }
+      }
+
+      if (addItemData.error) {
+        return res.status(400).json({
+          error: addItemData.message || addItemData.error,
+          detail: addItemData,
+        });
+      }
+
+      const itemId = addItemData.response?.item_id;
+
+      return res.status(200).json({
+        success: true,
+        itemId,
+        response: addItemData.response,
+      });
+    }
+
+    // 8b. ACTION: CẬP NHẬT SẢN PHẨM ĐÃ CÓ TRÊN SHOPEE (UPDATE ITEM)
+    if (action === "update_item") {
+      let shopId = String(body.shop_id || body.shopId || req.query.shop_id || "").trim();
+      let accessToken = String(body.access_token || body.accessToken || "").trim();
+      const itemId = Number(body.item_id || body.itemId);
+
+      if (!itemId) {
+        return res.status(400).json({ error: "Thiếu item_id để cập nhật sản phẩm." });
+      }
+
+      const { data: shops } = await supabase.from("shopee_shops").select("*");
+      const shop = shopId
+        ? shops?.find((s: any) => String(s.shop_id) === shopId)
+        : shops?.find((s: any) => s.is_default) || shops?.[0];
+
+      if (shop) {
+        shopId = String(shop.shop_id);
+        accessToken = shop.access_token;
+      }
+
+      if (!shopId || !accessToken) {
+        return res.status(400).json({ error: "Thiếu shop_id hoặc access_token." });
+      }
+
+      const imageIdList = body.image?.image_id_list || body.image_id_list || [];
+      const sizeChartId = String(body.size_chart || body.sizeChart || "").trim();
+
+      const payload: any = {
+        item_id: itemId,
+        item_name: String(body.item_name || body.name || "").trim() || undefined,
+        description: String(body.description || "").trim() || undefined,
+        category_id: body.category_id ? Number(body.category_id) : undefined,
+        original_price: body.original_price ? Number(body.original_price) : undefined,
+        weight: body.weight ? Number(body.weight) : undefined,
+        dimension: body.dimension ? {
+          package_height: Number(body.dimension.package_height || 5),
+          package_length: Number(body.dimension.package_length || 20),
+          package_width: Number(body.dimension.package_width || 15),
+        } : undefined,
+        item_sku: body.item_sku ? String(body.item_sku).trim() : undefined,
+        attribute_list: body.attribute_list || undefined,
+      };
+
+      if (imageIdList.length > 0) {
+        payload.image = { image_id_list: imageIdList };
+      }
+
+      if (sizeChartId) {
+        payload.size_chart_info = { size_chart: sizeChartId };
+      }
+
+      // Loại bỏ các field undefined
+      Object.keys(payload).forEach((k) => {
+        if (payload[k] === undefined) delete payload[k];
+      });
+
+      const apiPath = "/api/v2/product/update_item";
+      const timestamp = Math.floor(Date.now() / 1000);
+      const sign = generateShopeeSignature(partnerId, partnerKey, apiPath, timestamp, accessToken, shopId);
+      const url = `${host}${apiPath}?partner_id=${Number(partnerId)}&timestamp=${timestamp}&access_token=${accessToken}&shop_id=${Number(shopId)}&sign=${sign}`;
+
+      const updateRes = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const updateData = await safeFetchJson(updateRes);
+
+      if (updateData.error) {
+        return res.status(400).json({
+          error: updateData.message || updateData.error,
+          detail: updateData,
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        itemId,
+        response: updateData.response,
+      });
+    }
+
+    // 9. ACTION: KHỞI TẠO PHÂN LOẠI 2 TẦNG SHOPEE (INIT TIER VARIATION)
+    if (action === "init_tier_variation" || action === "init_tier") {
+      let shopId = String(body.shop_id || body.shopId || req.query.shop_id || "").trim();
+      let accessToken = String(body.access_token || body.accessToken || "").trim();
+      const itemId = Number(body.item_id || body.itemId);
+
+      if (!itemId) {
+        return res.status(400).json({ error: "Thiếu item_id để tạo phân loại biến thể." });
+      }
+
+      const { data: shops } = await supabase.from("shopee_shops").select("*");
+      const shop = shopId
+        ? shops?.find((s: any) => String(s.shop_id) === shopId)
+        : shops?.find((s: any) => s.is_default) || shops?.[0];
+
+      if (shop) {
+        shopId = String(shop.shop_id);
+        accessToken = shop.access_token;
+      }
+
+      if (!shopId || !accessToken) {
+        return res.status(400).json({ error: "Thiếu shop_id hoặc access_token." });
+      }
+
+      const apiPath = "/api/v2/product/init_tier_variation";
+      const timestamp = Math.floor(Date.now() / 1000);
+      const sign = generateShopeeSignature(partnerId, partnerKey, apiPath, timestamp, accessToken, shopId);
+      const url = `${host}${apiPath}?partner_id=${Number(partnerId)}&timestamp=${timestamp}&access_token=${accessToken}&shop_id=${Number(shopId)}&sign=${sign}`;
+
+      const modelPayload = (body.model || []).map((m: any) => ({
+        tier_index: m.tier_index,
+        original_price: Number(m.original_price || m.price || 0),
+        model_sku: String(m.model_sku || m.sku || "").trim(),
+        seller_stock: m.seller_stock || [
+          {
+            stock: Number(m.normal_stock || m.stock || 100),
+          },
+        ],
+      }));
+
+      const payload = {
+        item_id: itemId,
+        tier_variation: body.tier_variation || [],
+        model: modelPayload,
+      };
+
+      const tierRes = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const tierData = await safeFetchJson(tierRes);
+
+      if (tierData.error) {
+        return res.status(400).json({
+          error: tierData.message || tierData.error,
+          detail: tierData,
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        itemId,
+        response: tierData.response,
+      });
+    }
+
+    // 10. ACTION: LẤY THÔNG TIN SẢN PHẨM TRÊN SÀN (GET ITEM BASE INFO)
+    if (action === "get_item_base_info" || action === "get_item_info") {
+      let shopId = String(body.shop_id || body.shopId || req.query.shop_id || "").trim();
+      let accessToken = String(body.access_token || body.accessToken || "").trim();
+      const itemIdList = body.item_id_list || [Number(body.item_id || body.itemId || req.query.item_id)];
+
+      if (!shopId || !accessToken) {
+        const { data: shops } = await supabase.from("shopee_shops").select("*");
+        const shop = shopId
+          ? shops?.find((s: any) => String(s.shop_id) === shopId)
+          : shops?.find((s: any) => s.is_default) || shops?.[0];
+
+        if (shop) {
+          shopId = String(shop.shop_id);
+          accessToken = shop.access_token;
+        }
+      }
+
+      if (!shopId || !accessToken) {
+        return res.status(400).json({ error: "Thiếu shop_id hoặc access_token." });
+      }
+
+      const apiPath = "/api/v2/product/get_item_base_info";
+      const timestamp = Math.floor(Date.now() / 1000);
+      const sign = generateShopeeSignature(partnerId, partnerKey, apiPath, timestamp, accessToken, shopId);
+      const itemParam = itemIdList.map((id: any) => `item_id_list=${Number(id)}`).join("&");
+      const url = `${host}${apiPath}?partner_id=${Number(partnerId)}&timestamp=${timestamp}&access_token=${accessToken}&shop_id=${Number(shopId)}&sign=${sign}&${itemParam}`;
+
+      const itemRes = await fetch(url);
+      const itemData = await safeFetchJson(itemRes);
+
+      if (itemData.error) {
+        return res.status(400).json({
+          error: itemData.message || itemData.error,
+          detail: itemData,
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        itemList: itemData.response?.item_list || [],
+      });
+    }
+
     return res.status(400).json({ error: `Unknown action: ${action}` });
   } catch (err: any) {
     console.error("Shopee Proxy Error:", err);

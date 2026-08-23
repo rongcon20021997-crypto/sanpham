@@ -1412,3 +1412,561 @@ export async function fetchShopeeCategoryAttributes(
   throw new Error(proxyErrorMsg || "Không tìm thấy danh sách thuộc tính nào cho danh mục này.");
 }
 
+export interface ShopeePublishedProduct {
+  id: string;
+  master_code: string;
+  master_name: string;
+  shop_id: string;
+  shop_name: string;
+  shopee_item_id: number | null;
+  item_name: string;
+  category_id: number | null;
+  price: number;
+  status: "draft" | "publishing" | "published" | "failed";
+  shopee_url?: string;
+  error_message?: string;
+  payload?: any;
+  published_at?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export async function fetchShopeePublishedProducts(): Promise<ShopeePublishedProduct[]> {
+  try {
+    const { data, error } = await supabase
+      .from("shopee_published_products")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.warn("Lỗi fetch shopee_published_products từ Supabase:", error);
+      return [];
+    }
+    return (data as ShopeePublishedProduct[]) || [];
+  } catch (err) {
+    console.error("Lỗi fetchShopeePublishedProducts:", err);
+    return [];
+  }
+}
+
+export async function saveShopeePublishedProduct(record: Partial<ShopeePublishedProduct> & { master_code: string; shop_id: string }): Promise<ShopeePublishedProduct> {
+  const now = new Date().toISOString();
+  const payload = {
+    ...record,
+    updated_at: now,
+  };
+
+  const { data, error } = await supabase
+    .from("shopee_published_products")
+    .upsert(payload)
+    .select()
+    .single();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+  return data as ShopeePublishedProduct;
+}
+
+export async function deleteShopeePublishedProduct(id: string): Promise<void> {
+  const { error } = await supabase.from("shopee_published_products").delete().eq("id", id);
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+/**
+ * Tự động tạo ảnh Bảng Kích Cỡ (Size Chart) chuẩn Shopee bằng Canvas.
+ * Shopee AI sẽ kiểm tra xem ảnh có giống bảng đo thật hay không.
+ * Hàm này tạo 1 bảng đo chuẩn áo thun với các thông số phổ biến.
+ */
+export function generateSizeChartImage(sizes: string[]): string {
+  const activeSizes = sizes.length > 0 ? sizes : ["S", "M", "L", "XL", "2XL"];
+
+  // Dữ liệu đo chuẩn áo thun unisex oversize (cm)
+  const sizeDataMap: Record<string, { chest: string; length: string; shoulder: string; sleeve: string }> = {
+    "S":    { chest: "51",  length: "69", shoulder: "46", sleeve: "21" },
+    "M":    { chest: "53",  length: "71", shoulder: "48", sleeve: "22" },
+    "L":    { chest: "55",  length: "73", shoulder: "50", sleeve: "23" },
+    "XL":   { chest: "57",  length: "75", shoulder: "52", sleeve: "24" },
+    "2XL":  { chest: "59",  length: "77", shoulder: "54", sleeve: "25" },
+    "3XL":  { chest: "61",  length: "79", shoulder: "56", sleeve: "26" },
+    "4XL":  { chest: "63",  length: "81", shoulder: "58", sleeve: "27" },
+    "Freesize": { chest: "55", length: "73", shoulder: "50", sleeve: "23" },
+    "Tiêu chuẩn": { chest: "55", length: "73", shoulder: "50", sleeve: "23" },
+  };
+
+  const headers = ["Size", "Rộng ngực (cm)", "Dài áo (cm)", "Vai (cm)", "Tay (cm)"];
+  const colCount = headers.length;
+  const rowCount = activeSizes.length + 1; // +1 for header
+
+  const cellW = 160;
+  const cellH = 48;
+  const padX = 40;
+  const padY = 80;
+  const tableW = colCount * cellW;
+  const tableH = rowCount * cellH;
+  const canvasW = tableW + padX * 2;
+  const canvasH = tableH + padY + 60;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = canvasW;
+  canvas.height = canvasH;
+  const ctx = canvas.getContext("2d")!;
+
+  // Background
+  ctx.fillStyle = "#FFFFFF";
+  ctx.fillRect(0, 0, canvasW, canvasH);
+
+  // Title
+  ctx.fillStyle = "#222222";
+  ctx.font = "bold 26px Arial, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("BẢNG QUY ĐỔI KÍCH CỠ", canvasW / 2, 38);
+  ctx.font = "14px Arial, sans-serif";
+  ctx.fillStyle = "#888888";
+  ctx.fillText("(Sai số ±1-2 cm tùy phương pháp đo)", canvasW / 2, 60);
+
+  // Draw table
+  const startX = padX;
+  const startY = padY;
+
+  for (let row = 0; row < rowCount; row++) {
+    for (let col = 0; col < colCount; col++) {
+      const x = startX + col * cellW;
+      const y = startY + row * cellH;
+
+      // Cell background
+      if (row === 0) {
+        ctx.fillStyle = "#EE4D2D"; // Shopee orange header
+      } else {
+        ctx.fillStyle = row % 2 === 0 ? "#FFF5F0" : "#FFFFFF";
+      }
+      ctx.fillRect(x, y, cellW, cellH);
+
+      // Cell border
+      ctx.strokeStyle = row === 0 ? "#D94420" : "#E0E0E0";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x, y, cellW, cellH);
+
+      // Cell text
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+
+      if (row === 0) {
+        ctx.fillStyle = "#FFFFFF";
+        ctx.font = "bold 16px Arial, sans-serif";
+        ctx.fillText(headers[col], x + cellW / 2, y + cellH / 2);
+      } else {
+        const sizeName = activeSizes[row - 1];
+        const data = sizeDataMap[sizeName] || sizeDataMap["M"] || { chest: "54", length: "72", shoulder: "49", sleeve: "22" };
+
+        ctx.fillStyle = "#333333";
+        ctx.font = col === 0 ? "bold 16px Arial, sans-serif" : "15px Arial, sans-serif";
+
+        let value = "";
+        switch (col) {
+          case 0: value = sizeName; break;
+          case 1: value = data.chest; break;
+          case 2: value = data.length; break;
+          case 3: value = data.shoulder; break;
+          case 4: value = data.sleeve; break;
+        }
+        ctx.fillText(value, x + cellW / 2, y + cellH / 2);
+      }
+    }
+  }
+
+  // Footer note
+  ctx.fillStyle = "#999999";
+  ctx.font = "12px Arial, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("Đơn vị: cm | Đo áo trải phẳng", canvasW / 2, startY + tableH + 28);
+
+  return canvas.toDataURL("image/jpeg", 0.95);
+}
+
+import { loadImageWithR2Priority, getHdImageUrl } from "@/lib/r2Storage";
+
+/**
+ * Chuyển đổi bất kỳ URL hình ảnh nào thành base64 chuẩn JPEG (RGB, nền trắng)
+ * với ƯU TIÊN lấy ảnh GỐC chất lượng cao nhất (Full HD) từ Cloudflare R2.
+ */
+export async function convertImageUrlToJpegBase64(imageUrl: string): Promise<string> {
+  return new Promise(async (resolve) => {
+    try {
+      // 1. Ưu tiên tải ảnh gốc HD từ Cloudflare R2 (fallback tự động về Supabase)
+      const img = await loadImageWithR2Priority(imageUrl, "products/images").catch(() => {
+        const fallbackImg = new Image();
+        fallbackImg.crossOrigin = "anonymous";
+        fallbackImg.src = imageUrl;
+        return fallbackImg;
+      });
+
+      const performConvert = (loadedImg: HTMLImageElement) => {
+        try {
+          const canvas = document.createElement("canvas");
+          let width = loadedImg.naturalWidth || loadedImg.width || 1000;
+          let height = loadedImg.naturalHeight || loadedImg.height || 1000;
+
+          if (width > 2400 || height > 2400) {
+            const ratio = Math.min(2400 / width, 2400 / height);
+            width = Math.round(width * ratio);
+            height = Math.round(height * ratio);
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext("2d");
+          if (!ctx) {
+            return resolve(imageUrl);
+          }
+
+          // Vẽ nền trắng (nếu ảnh gốc PNG/WebP có nền trong suốt)
+          ctx.fillStyle = "#FFFFFF";
+          ctx.fillRect(0, 0, width, height);
+
+          // Vẽ ảnh gốc chất lượng cao lên canvas
+          ctx.drawImage(loadedImg, 0, 0, width, height);
+
+          // Xuất ra chuẩn JPEG chất lượng cao 0.95
+          const jpegBase64 = canvas.toDataURL("image/jpeg", 0.95);
+          resolve(jpegBase64);
+        } catch (err) {
+          console.warn("Lỗi canvas convert to JPEG:", err);
+          resolve(imageUrl);
+        }
+      };
+
+      if (img.complete && img.naturalWidth > 0) {
+        performConvert(img);
+      } else {
+        img.onload = () => performConvert(img);
+        img.onerror = () => resolve(imageUrl);
+      }
+    } catch {
+      resolve(imageUrl);
+    }
+  });
+}
+
+/**
+ * Tải 1 hình ảnh lên Shopee Media Space để nhận Image ID
+ */
+export async function uploadShopeeMediaImage(
+  shopId: string,
+  imageUrl: string,
+  scene: "normal" | "size_chart" = "normal"
+): Promise<{ imageId: string; imageUrlList: string[] }> {
+  // Tự động chuyển đổi WebP/PNG sang JPEG chuẩn Shopee trước khi gửi
+  let payloadBody: any = { shop_id: shopId, scene };
+  if (imageUrl.startsWith("data:image/")) {
+    payloadBody.image_base64 = imageUrl;
+  } else {
+    try {
+      const jpegData = await convertImageUrlToJpegBase64(imageUrl);
+      if (jpegData.startsWith("data:image/")) {
+        payloadBody.image_base64 = jpegData;
+      } else {
+        payloadBody.image_url = imageUrl;
+      }
+    } catch {
+      payloadBody.image_url = imageUrl;
+    }
+  }
+
+  const res = await fetch("/api/shopee/proxy?action=upload_image", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payloadBody),
+  });
+
+  const data = await res.json();
+  if (!res.ok || data.error || !data.imageId) {
+    throw new Error(data.error || "Lỗi tải ảnh lên Shopee Media Space.");
+  }
+  return {
+    imageId: data.imageId,
+    imageUrlList: data.imageUrlList || [],
+  };
+}
+
+export interface ShopeeTierVariationOption {
+  option: string;
+  image?: { image_id: string };
+}
+
+export interface ShopeeTierVariation {
+  name: string;
+  option_list: ShopeeTierVariationOption[];
+}
+
+export interface ShopeeModelItem {
+  tier_index: number[];
+  normal_stock: number;
+  original_price: number;
+  model_sku: string;
+}
+
+export interface PublishShopeeProductInput {
+  shopId: string;
+  masterCode: string;
+  masterName: string;
+  itemName: string;
+  description: string;
+  categoryId: number;
+  images: string[]; // URLs of images to upload
+  existingItemId?: number; // Nếu đã có trên sàn → update thay vì tạo mới
+  sizeChartImage?: string; // URL of size chart image
+  colorMockupMap?: Record<string, string>; // colorName -> imageUrl
+  weight: number; // kg
+  dimension: {
+    package_height: number;
+    package_length: number;
+    package_width: number;
+  };
+  logisticInfo: {
+    logistic_id: number;
+    enabled: boolean;
+  }[];
+  attributeList?: {
+    attribute_id: number;
+    attribute_value_list: { value_id: number; original_value_name?: string }[];
+  }[];
+  colors: string[];
+  sizes: string[];
+  models: {
+    color: string;
+    size: string;
+    price: number;
+    stock: number;
+    sku: string;
+  }[];
+}
+
+/**
+ * Toàn bộ quy trình đẩy 1 sản phẩm lên Shopee (Tải ảnh -> Tạo Item -> Tạo 2-tier variations -> Lưu DB)
+ */
+export async function publishProductToShopeeComplete(
+  input: PublishShopeeProductInput,
+  onProgress?: (step: string, percent: number) => void
+): Promise<{ itemId: number; shopeeUrl: string }> {
+  onProgress?.("1/3 Đang tải hình ảnh và mockup phôi lên Shopee Media Space...", 20);
+
+  // 1. Upload main images
+  const uploadedImageIds: string[] = [];
+  let lastUploadError = "";
+
+  for (let i = 0; i < input.images.length; i++) {
+    const url = input.images[i];
+    if (!url) continue;
+    try {
+      const upRes = await uploadShopeeMediaImage(input.shopId, url, "normal");
+      if (upRes.imageId) {
+        uploadedImageIds.push(upRes.imageId);
+      }
+    } catch (e: any) {
+      console.warn(`Lỗi upload ảnh ${i} (${url}):`, e);
+      lastUploadError = e.message || String(e);
+    }
+  }
+
+  if (uploadedImageIds.length === 0) {
+    throw new Error(lastUploadError || "Không thể tải ảnh sản phẩm lên máy chủ Shopee Media Space.");
+  }
+
+  // Upload color images if any
+  const colorImageIdMap: Record<string, string> = {};
+  if (input.colorMockupMap) {
+    for (const color of input.colors) {
+      const colUrl = input.colorMockupMap[color];
+      if (colUrl) {
+        try {
+          const colUpRes = await uploadShopeeMediaImage(input.shopId, colUrl, "normal");
+          if (colUpRes.imageId) {
+            colorImageIdMap[color] = colUpRes.imageId;
+          }
+        } catch (colErr) {
+          console.warn(`Lỗi upload ảnh màu ${color}:`, colErr);
+        }
+      }
+    }
+  }
+
+  onProgress?.("2/3 Đang tạo thông tin sản phẩm cơ sở trên Shopee...", 55);
+
+  // Default base price
+  const basePrice = input.models.length > 0 ? Math.min(...input.models.map((m) => m.price)) : 100000;
+
+  // Tự động tạo ảnh bảng kích cỡ chuẩn Shopee bằng Canvas
+  let sizeChartImageId = "";
+  if (input.sizeChartImage) {
+    // Nếu người dùng đã cung cấp ảnh bảng kích cỡ riêng
+    try {
+      const scRes = await uploadShopeeMediaImage(input.shopId, input.sizeChartImage, "normal");
+      if (scRes.imageId) sizeChartImageId = scRes.imageId;
+    } catch (scErr) {
+      console.warn("Lỗi upload size chart image:", scErr);
+    }
+  }
+
+  if (!sizeChartImageId) {
+    // Tự động sinh ảnh bảng kích cỡ chuẩn (Size Chart) bằng Canvas
+    try {
+      const sizeChartBase64 = generateSizeChartImage(input.sizes);
+      const scRes = await uploadShopeeMediaImage(input.shopId, sizeChartBase64, "normal");
+      if (scRes.imageId) sizeChartImageId = scRes.imageId;
+    } catch (scGenErr) {
+      console.warn("Lỗi tạo/upload size chart tự động:", scGenErr);
+    }
+  }
+
+  // 2. Tạo mới hoặc cập nhật sản phẩm trên Shopee
+  let itemId: number;
+
+  if (input.existingItemId) {
+    // Cập nhật sản phẩm đã có trên sàn (update_item)
+    const updateRes = await fetch("/api/shopee/proxy?action=update_item", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        shop_id: input.shopId,
+        item_id: input.existingItemId,
+        item_name: input.itemName,
+        description: input.description,
+        category_id: input.categoryId,
+        original_price: basePrice,
+        weight: input.weight,
+        dimension: input.dimension,
+        image: {
+          image_id_list: uploadedImageIds,
+        },
+        size_chart: sizeChartImageId,
+        item_sku: input.masterCode,
+        attribute_list: input.attributeList || [],
+      }),
+    });
+
+    const updateData = await updateRes.json();
+    if (!updateRes.ok || updateData.error) {
+      throw new Error(updateData.error || "Lỗi cập nhật sản phẩm trên Shopee.");
+    }
+    itemId = input.existingItemId;
+  } else {
+    // Tạo mới sản phẩm (add_item)
+    const addItemRes = await fetch("/api/shopee/proxy?action=add_item", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        shop_id: input.shopId,
+        item_name: input.itemName,
+        description: input.description,
+        category_id: input.categoryId,
+        original_price: basePrice,
+        weight: input.weight,
+        dimension: input.dimension,
+        logistic_info: input.logisticInfo,
+        image: {
+          image_id_list: uploadedImageIds,
+        },
+        size_chart: sizeChartImageId,
+        item_sku: input.masterCode,
+        attribute_list: input.attributeList || [],
+      }),
+    });
+
+    const addItemData = await addItemRes.json();
+    if (!addItemRes.ok || addItemData.error || !addItemData.itemId) {
+      throw new Error(addItemData.error || "Lỗi tạo sản phẩm cơ sở trên Shopee.");
+    }
+    itemId = addItemData.itemId;
+  }
+
+  // 3. Init Tier Variations if product has colors and sizes
+  if (input.colors.length > 0 && input.sizes.length > 0) {
+    onProgress?.("3/3 Đang khởi tạo bảng phân loại Màu sắc x Size trên Shopee...", 80);
+
+    const tierVariation: ShopeeTierVariation[] = [
+      {
+        name: "Màu sắc",
+        option_list: input.colors.map((c) => ({
+          option: c,
+          image: colorImageIdMap[c] ? { image_id: colorImageIdMap[c] } : undefined,
+        })),
+      },
+      {
+        name: "Size",
+        option_list: input.sizes.map((s) => ({
+          option: s,
+        })),
+      },
+    ];
+
+    const modelList: ShopeeModelItem[] = [];
+    for (let cIdx = 0; cIdx < input.colors.length; cIdx++) {
+      const colorName = input.colors[cIdx];
+      for (let sIdx = 0; sIdx < input.sizes.length; sIdx++) {
+        const sizeName = input.sizes[sIdx];
+        const matchModel = input.models.find((m) => m.color === colorName && m.size === sizeName);
+        const stockVal = matchModel ? matchModel.stock : 100;
+        modelList.push({
+          tier_index: [cIdx, sIdx],
+          normal_stock: stockVal,
+          seller_stock: [{ stock: stockVal }],
+          original_price: matchModel ? matchModel.price : basePrice,
+          model_sku: matchModel ? matchModel.sku : `${input.masterCode}-${colorName}-${sizeName}`,
+        } as any);
+      }
+    }
+
+    const tierRes = await fetch("/api/shopee/proxy?action=init_tier_variation", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        shop_id: input.shopId,
+        item_id: itemId,
+        tier_variation: tierVariation,
+        model: modelList,
+      }),
+    });
+
+    const tierData = await tierRes.json();
+    if (!tierRes.ok || tierData.error) {
+      console.warn("Lỗi tạo phân loại tier variations:", tierData.error);
+      // Vẫn giữ sản phẩm cơ sở đã tạo
+    }
+  }
+
+  const shopeeUrl = `https://shopee.vn/product/${input.shopId}/${itemId}`;
+
+  // 4. Lưu vết vào database Supabase
+  try {
+    const shops = getShopeeShops();
+    const shop = shops.find((s) => s.shopId === input.shopId || s.id === input.shopId);
+    await saveShopeePublishedProduct({
+      master_code: input.masterCode,
+      master_name: input.masterName,
+      shop_id: input.shopId,
+      shop_name: shop?.shopName || "Gian hàng Shopee",
+      shopee_item_id: itemId,
+      item_name: input.itemName,
+      category_id: input.categoryId,
+      price: basePrice,
+      status: "published",
+      shopee_url: shopeeUrl,
+      payload: {
+        images: uploadedImageIds,
+        colors: input.colors,
+        sizes: input.sizes,
+      },
+      published_at: new Date().toISOString(),
+    });
+  } catch (dbErr) {
+    console.error("Lỗi lưu shopee_published_products vào Supabase:", dbErr);
+  }
+
+  onProgress?.("🎉 Đăng sản phẩm lên Shopee thành công!", 100);
+  return { itemId, shopeeUrl };
+}
+
+

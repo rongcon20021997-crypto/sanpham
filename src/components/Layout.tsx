@@ -22,6 +22,7 @@ import {
   Wand2,
   Store,
   ShoppingBag,
+  UploadCloud,
 } from "lucide-react";
 
 export type PageKey =
@@ -33,6 +34,7 @@ export type PageKey =
   | "products"
   | "ai-prompts"
   | "product-optimize"
+  | "shopee-publish"
   | "shopee-shops"
   | "tiktok-shops"
   | "users"
@@ -53,6 +55,7 @@ const navItems: { key: PageKey; label: string; icon: typeof LayoutDashboard; adm
   { key: "products", label: "Sản phẩm", icon: Boxes },
   { key: "ai-prompts", label: "Mẫu Prompt AI", icon: Wand2 },
   { key: "product-optimize", label: "Tối ưu sản phẩm (AI)", icon: Sparkles },
+  { key: "shopee-publish", label: "Sản phẩm sàn (Shopee)", icon: UploadCloud },
   { key: "shopee-shops", label: "Gian hàng Shopee", icon: ShoppingBag },
   { key: "tiktok-shops", label: "Gian hàng TikTok", icon: Store },
   { key: "users", label: "Nhân viên", icon: Users, adminOnly: true },
