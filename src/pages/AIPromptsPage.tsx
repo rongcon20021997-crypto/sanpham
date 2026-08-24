@@ -1,7 +1,7 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { supabase } from "@/lib/supabase";
 import { Modal } from "@/components/Modal";
-import { PageHeader, EmptyState } from "@/components/PageParts";
+import { PageHeader } from "@/components/PageParts";
 import {
   Sparkles,
   Plus,
@@ -11,21 +11,35 @@ import {
   Copy,
   Check,
   RotateCcw,
-  Eye,
   Sliders,
-  Filter,
   Flame,
   CheckCircle2,
-  XCircle,
-  Wand2,
   Layers,
   HelpCircle,
-  ArrowRight,
+  UploadCloud,
+  FileSpreadsheet,
+  Download,
+  Users,
+  User,
+  Heart,
+  Wand2,
+  X,
+  AlertCircle,
+  RefreshCw,
 } from "lucide-react";
 import type { AIPrompt } from "@/lib/types";
 import { DEFAULT_AI_PROMPTS } from "@/lib/defaultPrompts";
+import * as XLSX from "xlsx";
 
-const LOCAL_STORAGE_KEY = "sanpham_ai_prompts_cache_v3";
+const LOCAL_STORAGE_KEY = "sanpham_ai_prompts_cache_v4";
+
+interface ExcelPromptPreview {
+  title: string;
+  category: string;
+  side: "all" | "front" | "back";
+  prompt: string;
+  is_active: boolean;
+}
 
 export function AIPromptsPage() {
   const [prompts, setPrompts] = useState<AIPrompt[]>([]);
@@ -33,10 +47,21 @@ export function AIPromptsPage() {
   const [search, setSearch] = useState("");
   const [selectedSide, setSelectedSide] = useState<"all" | "front" | "back">("all");
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
+  const [selectedModel, setSelectedModel] = useState<"all" | "female" | "male" | "couple">("all");
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<AIPrompt | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  // Excel Import State
+  const [importModalOpen, setImportModalOpen] = useState(false);
+  const [importLoading, setImportLoading] = useState(false);
+  const [importFileName, setImportFileName] = useState("");
+  const [importPreview, setImportPreview] = useState<ExcelPromptPreview[]>([]);
+  const [importMode, setImportMode] = useState<"append" | "replace">("append");
+  const [defaultImportCategory, setDefaultImportCategory] = useState("Cặp đôi / Couple");
+  const [defaultImportSide, setDefaultImportSide] = useState<"all" | "front" | "back">("front");
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Form State
   const [form, setForm] = useState<{
@@ -53,7 +78,7 @@ export function AIPromptsPage() {
     prompt: "",
   });
 
-  // Quick Add State (Chỉ cần ô nhập text)
+  // Quick Add State
   const [quickPromptText, setQuickPromptText] = useState("");
   const [quickSide, setQuickSide] = useState<"all" | "front" | "back">("all");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -69,6 +94,27 @@ export function AIPromptsPage() {
     const words = clean.split(" ");
     if (words.length <= 6) return clean;
     return words.slice(0, 6).join(" ") + "...";
+  }
+
+  function detectModelType(item: { title: string; prompt: string }): "couple" | "female" | "male" | "other" {
+    const t = (item.title + " " + item.prompt).toLowerCase();
+    if (
+      t.includes("cặp") ||
+      t.includes("couple") ||
+      t.includes("asian models") ||
+      t.includes("both models") ||
+      t.includes("two young adult") ||
+      t.includes("one male and one female")
+    ) {
+      return "couple";
+    }
+    if (t.includes("female model") || t.includes("model: female") || t.includes("vietnamese female")) {
+      return "female";
+    }
+    if (t.includes("male model") || t.includes("model: male") || t.includes("vietnamese male")) {
+      return "male";
+    }
+    return "other";
   }
 
   async function handleQuickAdd() {
@@ -144,7 +190,7 @@ export function AIPromptsPage() {
   function seedDefaultsLocal() {
     const list: AIPrompt[] = DEFAULT_AI_PROMPTS.map((p, idx) => ({
       ...p,
-      id: `word-preset-${idx + 1}`,
+      id: `preset-${idx + 1}`,
       created_at: new Date().toISOString(),
     }));
     setPrompts(list);
@@ -182,19 +228,31 @@ export function AIPromptsPage() {
       const matchCategory =
         selectedCategory === "all" ? true : p.category === selectedCategory;
 
-      return matchSearch && matchSide && matchCategory;
+      const modelType = detectModelType(p);
+      let matchModel = true;
+      if (selectedModel === "female") matchModel = modelType === "female";
+      else if (selectedModel === "male") matchModel = modelType === "male";
+      else if (selectedModel === "couple") matchModel = modelType === "couple";
+
+      return matchSearch && matchSide && matchCategory && matchModel;
     });
-  }, [prompts, search, selectedSide, selectedCategory]);
+  }, [prompts, search, selectedSide, selectedCategory, selectedModel]);
 
   const stats = useMemo(() => {
     const active = prompts.filter((p) => p.is_active).length;
     const front = prompts.filter((p) => p.side === "front" || p.side === "all").length;
     const back = prompts.filter((p) => p.side === "back" || p.side === "all").length;
+    const female = prompts.filter((p) => detectModelType(p) === "female").length;
+    const male = prompts.filter((p) => detectModelType(p) === "male").length;
+    const couple = prompts.filter((p) => detectModelType(p) === "couple").length;
     return {
       total: prompts.length,
       active,
       front,
       back,
+      female,
+      male,
+      couple,
     };
   }, [prompts]);
 
@@ -233,7 +291,6 @@ export function AIPromptsPage() {
     const updated = [newPrompt, ...prompts];
     saveToDatabase(updated);
 
-    // Try Supabase insert
     supabase
       .from("ai_prompts")
       .insert({
@@ -270,10 +327,11 @@ export function AIPromptsPage() {
     } catch (e) {}
   }
 
+  // Khôi phục nạp đầy đủ 74 mẫu gốc (37 đơn + 37 cặp đôi)
   async function handleResetDefaults() {
     if (
       !confirm(
-        "Nạp lại toàn bộ 37 mẫu Prompt từ file Word? Bấm 'OK' để xóa toàn bộ danh sách cũ và nạp mới đúng 37 mẫu chuẩn từ Word."
+        `Nạp lại toàn bộ ${DEFAULT_AI_PROMPTS.length} mẫu Prompt chuẩn (37 mẫu Nam/Nữ đơn + 37 mẫu Cặp đôi Nam & Nữ)? Thao tác này sẽ làm mới danh sách prompt chuẩn từ hệ thống.`
       )
     )
       return;
@@ -281,7 +339,7 @@ export function AIPromptsPage() {
     setLoading(true);
     const newItems: AIPrompt[] = DEFAULT_AI_PROMPTS.map((d, i) => ({
       ...d,
-      id: `word-prompt-${i + 1}`,
+      id: `preset-prompt-${i + 1}`,
       created_at: new Date().toISOString(),
     }));
 
@@ -299,12 +357,267 @@ export function AIPromptsPage() {
           is_active: item.is_active,
         });
       }
-      showToast("🎉 Đã nạp thành công 37 mẫu prompt từ file Word!");
+      showToast(`🎉 Đã nạp thành công toàn bộ ${DEFAULT_AI_PROMPTS.length} mẫu prompt chuẩn!`);
     } catch (e) {
       console.warn("Lỗi lưu Supabase:", e);
-      showToast("🎉 Đã nạp 37 mẫu prompt từ Word vào bộ nhớ!");
+      showToast(`🎉 Đã nạp ${DEFAULT_AI_PROMPTS.length} mẫu prompt vào bộ nhớ!`);
     } finally {
       setLoading(false);
+    }
+  }
+
+  // Nạp thêm 37 mẫu Cặp đôi vào danh sách hiện tại (không xóa mẫu cũ)
+  async function handleAppendCouplePresets() {
+    setLoading(true);
+    const couplePresets = DEFAULT_AI_PROMPTS.filter((p) => detectModelType(p) === "couple");
+    const existingTitles = new Set(prompts.map((p) => p.title.trim().toLowerCase()));
+    const toAdd = couplePresets.filter(
+      (p) => !existingTitles.has(p.title.trim().toLowerCase())
+    );
+
+    if (toAdd.length === 0) {
+      showToast("ℹ️ Bạn đã có đầy đủ 37 mẫu Cặp Đôi trong danh sách!");
+      setLoading(false);
+      return;
+    }
+
+    const newItems: AIPrompt[] = toAdd.map((d, i) => ({
+      ...d,
+      id: `couple-prompt-${Date.now()}-${i + 1}`,
+      created_at: new Date().toISOString(),
+    }));
+
+    const merged = [...prompts, ...newItems];
+    saveToDatabase(merged);
+
+    try {
+      for (const item of toAdd) {
+        await supabase.from("ai_prompts").insert({
+          title: item.title,
+          prompt: item.prompt,
+          side: item.side,
+          category: item.category,
+          is_active: item.is_active,
+        });
+      }
+      showToast(`🎉 Đã thêm thành công ${newItems.length} mẫu prompt Cặp Đôi Nam & Nữ!`);
+    } catch (e) {
+      showToast(`🎉 Đã nạp thêm ${newItems.length} mẫu Cặp Đôi vào bộ nhớ!`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Xử lý đọc file Excel (.xlsx, .xls, .csv)
+  function handleExcelFileUpload(file: File) {
+    setImportFileName(file.name);
+    setImportLoading(true);
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const buffer = e.target?.result;
+        const wb = XLSX.read(buffer, { type: "binary" });
+        const firstSheetName = wb.SheetNames[0];
+        const sheet = wb.Sheets[firstSheetName];
+        const rawRows = XLSX.utils.sheet_to_json<any[]>(sheet, { header: 1 });
+
+        if (!rawRows || rawRows.length === 0) {
+          alert("File Excel trống hoặc không đọc được dữ liệu!");
+          setImportLoading(false);
+          return;
+        }
+
+        // Parse header and rows
+        const parsedList: ExcelPromptPreview[] = [];
+        let headerRowIndex = 0;
+
+        // Check if first row is header
+        const row0 = (rawRows[0] || []).map((c) => String(c || "").toLowerCase().trim());
+        let titleCol = -1;
+        let promptCol = -1;
+        let categoryCol = -1;
+        let sideCol = -1;
+
+        row0.forEach((colName, idx) => {
+          if (
+            colName.includes("bối cảnh") ||
+            colName.includes("tiêu đề") ||
+            colName.includes("title") ||
+            colName.includes("tên")
+          ) {
+            titleCol = idx;
+          }
+          if (
+            colName.includes("prompt") ||
+            colName.includes("câu lệnh") ||
+            colName.includes("nội dung") ||
+            colName.includes("content")
+          ) {
+            promptCol = idx;
+          }
+          if (
+            colName.includes("category") ||
+            colName.includes("thể loại") ||
+            colName.includes("danh mục") ||
+            colName.includes("nhóm")
+          ) {
+            categoryCol = idx;
+          }
+          if (
+            colName.includes("side") ||
+            colName.includes("mặt") ||
+            colName.includes("vị trí")
+          ) {
+            sideCol = idx;
+          }
+        });
+
+        // Default fallbacks if header doesn't explicitly match
+        if (titleCol === -1 && promptCol === -1) {
+          // Check standard 3-column format: [STT, Bối cảnh, Prompt]
+          if (rawRows[0].length >= 3) {
+            titleCol = 1;
+            promptCol = 2;
+          } else if (rawRows[0].length === 2) {
+            titleCol = 0;
+            promptCol = 1;
+          } else {
+            promptCol = 0;
+          }
+          headerRowIndex = 1; // start from row 1
+        } else {
+          headerRowIndex = 1;
+        }
+
+        const dataRows = rawRows.slice(headerRowIndex);
+        dataRows.forEach((row, rowIdx) => {
+          if (!row || row.length === 0) return;
+          const promptText = promptCol >= 0 && row[promptCol] ? String(row[promptCol]).trim() : "";
+          if (!promptText) return;
+
+          let rawTitle =
+            titleCol >= 0 && row[titleCol] ? String(row[titleCol]).trim() : "";
+          if (!rawTitle) {
+            rawTitle = generateTitleFromPrompt(promptText);
+          }
+
+          let category =
+            categoryCol >= 0 && row[categoryCol]
+              ? String(row[categoryCol]).trim()
+              : defaultImportCategory;
+          if (!category) category = "Cặp đôi / Couple";
+
+          let side: "all" | "front" | "back" = defaultImportSide;
+          if (sideCol >= 0 && row[sideCol]) {
+            const s = String(row[sideCol]).toLowerCase();
+            if (s.includes("front") || s.includes("trước")) side = "front";
+            else if (s.includes("back") || s.includes("sau")) side = "back";
+            else side = "all";
+          }
+
+          parsedList.push({
+            title: rawTitle,
+            category,
+            side,
+            prompt: promptText.replace(/\r\n/g, "\n").replace(/\r/g, "\n"),
+            is_active: true,
+          });
+        });
+
+        if (parsedList.length === 0) {
+          alert("Không tìm thấy dòng prompt hợp lệ nào trong file Excel!");
+          setImportLoading(false);
+          return;
+        }
+
+        setImportPreview(parsedList);
+        setImportModalOpen(true);
+      } catch (err: any) {
+        console.error("Excel parse error:", err);
+        alert("Lỗi khi đọc file Excel: " + (err.message || String(err)));
+      } finally {
+        setImportLoading(false);
+      }
+    };
+
+    reader.readAsBinaryString(file);
+  }
+
+  // Thực thi Import các dòng từ Excel vào App & Supabase
+  async function handleExecuteImport() {
+    if (importPreview.length === 0) return;
+    setImportLoading(true);
+
+    try {
+      const newItems: AIPrompt[] = importPreview.map((item, i) => ({
+        id: `import-${Date.now()}-${i + 1}`,
+        title: item.title,
+        prompt: item.prompt,
+        category: item.category || defaultImportCategory,
+        side: item.side || defaultImportSide,
+        is_active: item.is_active,
+        created_at: new Date().toISOString(),
+      }));
+
+      let finalPrompts: AIPrompt[] = [];
+      if (importMode === "replace") {
+        finalPrompts = newItems;
+        await supabase.from("ai_prompts").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+      } else {
+        finalPrompts = [...prompts, ...newItems];
+      }
+
+      saveToDatabase(finalPrompts);
+
+      // Save to supabase
+      for (const item of newItems) {
+        await supabase.from("ai_prompts").insert({
+          title: item.title,
+          prompt: item.prompt,
+          side: item.side,
+          category: item.category,
+          is_active: item.is_active,
+        });
+      }
+
+      setImportModalOpen(false);
+      setImportPreview([]);
+      setImportFileName("");
+      if (fileInputRef.current) fileInputRef.current.value = "";
+
+      showToast(
+        importMode === "replace"
+          ? `🎉 Đã thay thế toàn bộ bằng ${newItems.length} mẫu prompt từ Excel!`
+          : `🎉 Đã import thêm thành công ${newItems.length} mẫu prompt từ Excel!`
+      );
+    } catch (e: any) {
+      console.error("Import error:", e);
+      showToast(`⚠️ Có lỗi trong quá trình lưu Supabase: ${e.message || "Lỗi không xác định"}`);
+    } finally {
+      setImportLoading(false);
+    }
+  }
+
+  // Xuất file Excel các prompt hiện có
+  function handleExportExcel() {
+    try {
+      const exportData = prompts.map((p, idx) => ({
+        STT: idx + 1,
+        "Tiêu đề": p.title,
+        "Phong cách / Category": p.category || "",
+        "Mặt in (Side)": p.side,
+        "Trạng thái": p.is_active ? "Đang bật" : "Đã tắt",
+        "Nội dung Prompt": p.prompt,
+      }));
+
+      const ws = XLSX.utils.json_to_sheet(exportData);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Prompts");
+      XLSX.writeFile(wb, `ai_prompts_export_${new Date().toISOString().slice(0, 10)}.xlsx`);
+      showToast("📥 Đã xuất file Excel danh sách prompt thành công!");
+    } catch (err: any) {
+      alert("Lỗi khi xuất file Excel: " + err.message);
     }
   }
 
@@ -415,6 +728,18 @@ export function AIPromptsPage() {
 
   return (
     <div className="animate-fade-in space-y-6">
+      {/* Hidden File Input for Excel */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        accept=".xlsx, .xls, .csv"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) handleExcelFileUpload(file);
+        }}
+      />
+
       {/* Toast Notification */}
       {toastMessage && (
         <div className="fixed top-6 right-6 z-50 animate-bounce bg-slate-800 text-slate-100 px-4 py-2.5 rounded-xl shadow-2xl border border-brand-500/50 flex items-center gap-2 text-sm font-semibold backdrop-blur-md">
@@ -424,29 +749,62 @@ export function AIPromptsPage() {
 
       <PageHeader
         title="Danh Sách Mẫu Prompt AI"
-        subtitle="Quản lý thư viện câu lệnh AI đa phong cách để tool Auto ChatGPT tự động bốc ngẫu nhiên (Random), giúp ảnh tạo ra đa dạng bối cảnh & không bị trùng lặp"
+        subtitle="Quản lý kho prompt AI (Nam, Nữ, Cặp đôi Nam & Nữ) để tool Auto ChatGPT tự động bốc ngẫu nhiên tạo ảnh mockup sống động & chuẩn phôi"
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Import Excel */}
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="btn btn-secondary flex items-center gap-1.5 text-xs sm:text-sm bg-emerald-950/40 hover:bg-emerald-900/50 text-emerald-400 border-emerald-500/30"
+              title="Nhập thêm câu prompt từ file Excel (.xlsx, .xls, .csv)"
+            >
+              <FileSpreadsheet size={16} />
+              <span>Import Excel (.xlsx)</span>
+            </button>
+
+            {/* Export Excel */}
+            <button
+              onClick={handleExportExcel}
+              className="btn btn-secondary flex items-center gap-1.5 text-xs sm:text-sm"
+              title="Xuất danh sách prompt ra file Excel"
+            >
+              <Download size={15} className="text-slate-400" />
+              <span className="hidden sm:inline">Xuất Excel</span>
+            </button>
+
+            {/* Nạp 37 Cặp đôi */}
+            <button
+              onClick={handleAppendCouplePresets}
+              className="btn btn-secondary flex items-center gap-1.5 text-xs sm:text-sm bg-purple-950/40 hover:bg-purple-900/50 text-purple-300 border-purple-500/30"
+              title="Nạp thêm 37 mẫu Cặp Nam & Nữ vào danh sách hiện tại"
+            >
+              <Users size={16} className="text-purple-400" />
+              <span>+37 Mẫu Cặp Đôi</span>
+            </button>
+
+            {/* Nạp 74 mẫu gốc */}
             <button
               onClick={handleResetDefaults}
-              className="btn btn-secondary flex items-center gap-2 text-xs sm:text-sm"
-              title="Nạp bổ sung 37 mẫu prompt từ file Word"
+              className="btn btn-secondary flex items-center gap-1.5 text-xs sm:text-sm"
+              title="Khôi phục trọn bộ 74 mẫu prompt chuẩn (37 Đơn + 37 Cặp đôi)"
             >
-              <RotateCcw size={16} className="text-amber-400" />
-              <span>Nạp 37 Mẫu Từ Word</span>
+              <RotateCcw size={15} className="text-amber-400" />
+              <span className="hidden sm:inline">Nạp 74 Mẫu Gốc</span>
             </button>
+
+            {/* Thêm mới */}
             <button
               onClick={openCreate}
-              className="btn btn-primary flex items-center gap-2 text-xs sm:text-sm"
+              className="btn btn-primary flex items-center gap-1.5 text-xs sm:text-sm"
             >
               <Plus size={16} />
-              <span>Thêm Mẫu Prompt Mới</span>
+              <span>Thêm Mẫu Mới</span>
             </button>
           </div>
         }
       />
 
-      {/* QUICK ADD PROMPT BOX - CHỈ CẦN Ô NHẬP TEXT */}
+      {/* QUICK ADD PROMPT BOX */}
       <div className="card-gradient rounded-2xl border border-brand-500/30 p-4 sm:p-5 bg-gradient-to-br from-brand-950/30 via-slate-900/70 to-slate-900/90 shadow-xl shadow-brand-950/20">
         <div className="flex items-center justify-between gap-2 mb-3">
           <div className="flex items-center gap-2.5">
@@ -455,243 +813,318 @@ export function AIPromptsPage() {
             </div>
             <div>
               <h3 className="text-sm sm:text-base font-bold text-slate-100 flex items-center gap-2">
-                Thêm Mẫu Prompt Mới (Đơn Giản)
+                Thêm Nhanh Câu Prompt Mới
                 <span className="text-[11px] font-normal text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
-                  ⚡ Chỉ cần ô nhập text
+                  ⚡ Dán text & Lưu
                 </span>
               </h3>
-              <p className="text-xs text-slate-400">
-                Chỉ cần dán/gõ câu lệnh prompt vào đây và bấm <strong>Thêm Mẫu Prompt</strong> (hoặc nhấn <strong>Ctrl + Enter</strong>).
+              <p className="text-xs text-slate-400 hidden sm:block">
+                Dán câu prompt AI vào đây, hệ thống sẽ tự động phân loại và đưa vào kho ngẫu nhiên.
               </p>
             </div>
           </div>
         </div>
 
-        {/* Text Input Area */}
-        <div className="relative">
+        <div className="space-y-3">
           <textarea
             rows={3}
             value={quickPromptText}
             onChange={(e) => setQuickPromptText(e.target.value)}
-            onKeyDown={(e) => {
-              if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-                e.preventDefault();
-                handleQuickAdd();
-              }
-            }}
-            placeholder="Nhập hoặc dán câu prompt của bạn vào đây... Ví dụ: Mockup thương mại của {blank_type} màu {color}, in hình {design_name} ({side}). Chụp ảnh studio ánh sáng tự nhiên, góc nhìn hiện đại..."
-            className="w-full bg-slate-950 border border-slate-700/80 hover:border-slate-600 focus:border-brand-500 rounded-xl p-3.5 text-sm text-slate-100 placeholder-slate-500 font-mono text-xs leading-relaxed focus:outline-none transition-all shadow-inner"
+            placeholder="Dán câu prompt tại đây (VD: Asian models, Vietnamese male and female, wearing this exact {color} {blank_type}...)"
+            className="w-full bg-slate-950/90 border border-slate-700/80 rounded-xl p-3 text-xs text-slate-100 placeholder-slate-500 font-mono leading-relaxed focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500"
           />
+
+          <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+            {/* Variable insertion buttons */}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-[11px] text-slate-500 font-medium mr-1">Chèn biến:</span>
+              {[
+                { label: "+ {blank_type}", key: "blank_type", color: "text-purple-400 border-purple-500/30 hover:bg-purple-500/10" },
+                { label: "+ {color}", key: "color", color: "text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/10" },
+                { label: "+ {design_name}", key: "design_name", color: "text-amber-400 border-amber-500/30 hover:bg-amber-500/10" },
+                { label: "+ {side}", key: "side", color: "text-rose-400 border-rose-500/30 hover:bg-rose-500/10" },
+              ].map((v) => (
+                <button
+                  key={v.key}
+                  type="button"
+                  onClick={() => setQuickPromptText((prev) => `${prev} {${v.key}} `)}
+                  className={`px-2 py-1 bg-slate-900 rounded-lg text-xs font-mono border transition-all ${v.color}`}
+                >
+                  {v.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Side selector & Submit button */}
+            <div className="flex items-center gap-2.5 w-full sm:w-auto justify-end">
+              <div className="flex p-0.5 bg-slate-950 rounded-lg border border-slate-800 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setQuickSide("all")}
+                  className={`px-2.5 py-1 rounded-md transition-all ${
+                    quickSide === "all" ? "bg-brand-500 text-white font-medium shadow-sm" : "text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  Cả 2 mặt
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setQuickSide("front")}
+                  className={`px-2.5 py-1 rounded-md transition-all ${
+                    quickSide === "front" ? "bg-brand-500 text-white font-medium shadow-sm" : "text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  Mặt trước
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setQuickSide("back")}
+                  className={`px-2.5 py-1 rounded-md transition-all ${
+                    quickSide === "back" ? "bg-brand-500 text-white font-medium shadow-sm" : "text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  Mặt sau
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleQuickAdd}
+                className="btn btn-primary px-4 py-2 flex items-center gap-1.5 text-xs sm:text-sm font-semibold shadow-lg shadow-brand-500/20 hover:brightness-110 active:scale-95 transition-all"
+              >
+                <Plus size={16} />
+                <span>Thêm Mẫu Prompt</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* STATS OVERVIEW */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-4">
+        <div className="card-gradient p-3.5 sm:p-4 rounded-2xl border border-slate-800 flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-brand-500/10 flex items-center justify-center text-brand-400 shrink-0">
+            <Sparkles size={20} />
+          </div>
+          <div>
+            <p className="text-[11px] text-slate-400 font-medium">Tổng Mẫu</p>
+            <p className="text-xl font-bold text-slate-100">{stats.total}</p>
+          </div>
         </div>
 
-        {/* Toolbar & Controls below textarea */}
-        <div className="flex flex-wrap items-center justify-between gap-3 mt-3 pt-2.5 border-t border-slate-800/80">
-          {/* Quick Variable Insertion Helper */}
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="text-[11px] text-slate-400 font-medium mr-1 flex items-center gap-1">
-              <HelpCircle size={12} /> Chèn biến nhanh:
-            </span>
-            {[
-              { key: "product_name", label: "+ {product_name}", color: "text-sky-400 hover:bg-sky-500/10 border-sky-500/20" },
-              { key: "color", label: "+ {color}", color: "text-emerald-400 hover:bg-emerald-500/10 border-emerald-500/20" },
-              { key: "design_name", label: "+ {design_name}", color: "text-amber-400 hover:bg-amber-500/10 border-amber-500/20" },
-              { key: "blank_type", label: "+ {blank_type}", color: "text-purple-400 hover:bg-purple-500/10 border-purple-500/20" },
-              { key: "side", label: "+ {side}", color: "text-rose-400 hover:bg-rose-500/10 border-rose-500/20" },
-            ].map((v) => (
-              <button
-                key={v.key}
-                type="button"
-                onClick={() => setQuickPromptText((prev) => `${prev} {${v.key}} `)}
-                className={`px-2 py-1 bg-slate-900 rounded-lg text-xs font-mono border transition-all ${v.color}`}
-              >
-                {v.label}
-              </button>
-            ))}
+        <div className="card-gradient p-3.5 sm:p-4 rounded-2xl border border-slate-800 flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-purple-500/10 flex items-center justify-center text-purple-400 shrink-0">
+            <Users size={20} />
+          </div>
+          <div>
+            <p className="text-[11px] text-slate-400 font-medium">Cặp Nam & Nữ</p>
+            <p className="text-xl font-bold text-purple-400">{stats.couple}</p>
+          </div>
+        </div>
+
+        <div className="card-gradient p-3.5 sm:p-4 rounded-2xl border border-slate-800 flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-pink-500/10 flex items-center justify-center text-pink-400 shrink-0">
+            <User size={20} />
+          </div>
+          <div>
+            <p className="text-[11px] text-slate-400 font-medium">Mẫu Nữ (Female)</p>
+            <p className="text-xl font-bold text-pink-400">{stats.female}</p>
+          </div>
+        </div>
+
+        <div className="card-gradient p-3.5 sm:p-4 rounded-2xl border border-slate-800 flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-indigo-500/10 flex items-center justify-center text-indigo-400 shrink-0">
+            <User size={20} />
+          </div>
+          <div>
+            <p className="text-[11px] text-slate-400 font-medium">Mẫu Nam (Male)</p>
+            <p className="text-xl font-bold text-indigo-400">{stats.male}</p>
+          </div>
+        </div>
+
+        <div className="card-gradient p-3.5 sm:p-4 rounded-2xl border border-slate-800 flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-emerald-500/10 flex items-center justify-center text-emerald-400 shrink-0">
+            <CheckCircle2 size={20} />
+          </div>
+          <div>
+            <p className="text-[11px] text-slate-400 font-medium">Đang Bật</p>
+            <p className="text-xl font-bold text-emerald-400">{stats.active}</p>
+          </div>
+        </div>
+
+        <div className="card-gradient p-3.5 sm:p-4 rounded-2xl border border-slate-800 flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-sky-500/10 flex items-center justify-center text-sky-400 shrink-0">
+            <Layers size={20} />
+          </div>
+          <div>
+            <p className="text-[11px] text-slate-400 font-medium">Mặt Trước / Sau</p>
+            <p className="text-sm font-bold text-sky-400">
+              {stats.front} <span className="text-slate-500 text-xs font-normal">trước</span> / {stats.back} <span className="text-slate-500 text-xs font-normal">sau</span>
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* MODEL FILTER TABS & SEARCH BAR */}
+      <div className="card-gradient p-3.5 sm:p-4 rounded-2xl border border-slate-800 space-y-3">
+        {/* Model Filter Tabs */}
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+          <span className="text-xs text-slate-400 font-semibold flex items-center gap-1 mr-2 shrink-0">
+            <Users size={14} /> Đối tượng Model:
+          </span>
+
+          <button
+            onClick={() => setSelectedModel("all")}
+            className={`px-3 py-1.5 rounded-xl text-xs font-medium transition-all shrink-0 flex items-center gap-1.5 ${
+              selectedModel === "all"
+                ? "bg-brand-500 text-white shadow-md shadow-brand-500/20"
+                : "bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800"
+            }`}
+          >
+            <span>Tất cả ({prompts.length})</span>
+          </button>
+
+          <button
+            onClick={() => setSelectedModel("couple")}
+            className={`px-3 py-1.5 rounded-xl text-xs font-medium transition-all shrink-0 flex items-center gap-1.5 ${
+              selectedModel === "couple"
+                ? "bg-purple-600 text-white shadow-md shadow-purple-600/20 font-bold"
+                : "bg-slate-900 text-purple-300 hover:text-purple-200 border border-purple-500/30"
+            }`}
+          >
+            <Heart size={13} className="text-purple-300" />
+            <span>Cặp Nam & Nữ ({stats.couple})</span>
+          </button>
+
+          <button
+            onClick={() => setSelectedModel("female")}
+            className={`px-3 py-1.5 rounded-xl text-xs font-medium transition-all shrink-0 flex items-center gap-1.5 ${
+              selectedModel === "female"
+                ? "bg-pink-600 text-white shadow-md shadow-pink-600/20 font-bold"
+                : "bg-slate-900 text-pink-300 hover:text-pink-200 border border-pink-500/30"
+            }`}
+          >
+            <User size={13} className="text-pink-300" />
+            <span>Mẫu Nữ ({stats.female})</span>
+          </button>
+
+          <button
+            onClick={() => setSelectedModel("male")}
+            className={`px-3 py-1.5 rounded-xl text-xs font-medium transition-all shrink-0 flex items-center gap-1.5 ${
+              selectedModel === "male"
+                ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/20 font-bold"
+                : "bg-slate-900 text-indigo-300 hover:text-indigo-200 border border-indigo-500/30"
+            }`}
+          >
+            <User size={13} className="text-indigo-300" />
+            <span>Mẫu Nam ({stats.male})</span>
+          </button>
+        </div>
+
+        <div className="flex flex-col sm:flex-row gap-3 items-center justify-between pt-1 border-t border-slate-800/80">
+          {/* Search */}
+          <div className="relative w-full sm:w-80">
+            <Search
+              size={16}
+              className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500"
+            />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Tìm theo bối cảnh, từ khóa prompt..."
+              className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-4 py-2 text-xs sm:text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-brand-500"
+            />
           </div>
 
-          {/* Side selector & Submit button */}
-          <div className="flex items-center gap-2.5 w-full sm:w-auto justify-end">
-            <div className="flex p-0.5 bg-slate-950 rounded-lg border border-slate-800 text-xs">
+          {/* Filters */}
+          <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+            {/* Side Filter */}
+            <div className="flex p-1 bg-slate-900 rounded-xl border border-slate-800 text-xs">
               <button
-                type="button"
-                onClick={() => setQuickSide("all")}
-                className={`px-2.5 py-1 rounded-md transition-all ${
-                  quickSide === "all" ? "bg-brand-500 text-white font-medium shadow-sm" : "text-slate-400 hover:text-slate-200"
+                onClick={() => setSelectedSide("all")}
+                className={`px-3 py-1.5 rounded-lg font-medium transition-all ${
+                  selectedSide === "all"
+                    ? "bg-brand-500 text-white shadow-sm"
+                    : "text-slate-400 hover:text-slate-200"
                 }`}
               >
-                Cả 2 mặt
+                Tất cả mặt
               </button>
               <button
-                type="button"
-                onClick={() => setQuickSide("front")}
-                className={`px-2.5 py-1 rounded-md transition-all ${
-                  quickSide === "front" ? "bg-brand-500 text-white font-medium shadow-sm" : "text-slate-400 hover:text-slate-200"
+                onClick={() => setSelectedSide("front")}
+                className={`px-3 py-1.5 rounded-lg font-medium transition-all ${
+                  selectedSide === "front"
+                    ? "bg-brand-500 text-white shadow-sm"
+                    : "text-slate-400 hover:text-slate-200"
                 }`}
               >
                 Mặt trước
               </button>
               <button
-                type="button"
-                onClick={() => setQuickSide("back")}
-                className={`px-2.5 py-1 rounded-md transition-all ${
-                  quickSide === "back" ? "bg-brand-500 text-white font-medium shadow-sm" : "text-slate-400 hover:text-slate-200"
+                onClick={() => setSelectedSide("back")}
+                className={`px-3 py-1.5 rounded-lg font-medium transition-all ${
+                  selectedSide === "back"
+                    ? "bg-brand-500 text-white shadow-sm"
+                    : "text-slate-400 hover:text-slate-200"
                 }`}
               >
                 Mặt sau
               </button>
             </div>
 
-            <button
-              type="button"
-              onClick={handleQuickAdd}
-              className="btn btn-primary px-4 py-2 flex items-center gap-1.5 text-xs sm:text-sm font-semibold shadow-lg shadow-brand-500/20 hover:brightness-110 active:scale-95 transition-all"
-              title="Phím tắt: Ctrl + Enter"
+            {/* Category Filter */}
+            <select
+              value={selectedCategory}
+              onChange={(e) => setSelectedCategory(e.target.value)}
+              className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-300 focus:outline-none focus:border-brand-500"
             >
-              <Plus size={16} />
-              <span>Thêm Mẫu Prompt</span>
-            </button>
+              <option value="all">Tất cả bối cảnh ({categories.length - 1})</option>
+              {categories
+                .filter((c) => c !== "all")
+                .map((cat) => (
+                  <option key={cat} value={cat}>
+                    {cat}
+                  </option>
+                ))}
+            </select>
           </div>
-        </div>
-      </div>
-
-      {/* STATS OVERVIEW */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
-        <div className="card-gradient p-4 rounded-2xl border border-slate-800 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-brand-500/10 flex items-center justify-center text-brand-400">
-            <Sparkles size={20} />
-          </div>
-          <div>
-            <p className="text-xs text-slate-400 font-medium">Tổng Mẫu Prompt</p>
-            <p className="text-xl font-bold text-slate-100">{stats.total}</p>
-          </div>
-        </div>
-
-        <div className="card-gradient p-4 rounded-2xl border border-slate-800 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-emerald-500/10 flex items-center justify-center text-emerald-400">
-            <CheckCircle2 size={20} />
-          </div>
-          <div>
-            <p className="text-xs text-slate-400 font-medium">Đang Kích Hoạt</p>
-            <p className="text-xl font-bold text-emerald-400">{stats.active}</p>
-          </div>
-        </div>
-
-        <div className="card-gradient p-4 rounded-2xl border border-slate-800 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-sky-500/10 flex items-center justify-center text-sky-400">
-            <Layers size={20} />
-          </div>
-          <div>
-            <p className="text-xs text-slate-400 font-medium">Mặt Trước (Front)</p>
-            <p className="text-xl font-bold text-sky-400">{stats.front}</p>
-          </div>
-        </div>
-
-        <div className="card-gradient p-4 rounded-2xl border border-slate-800 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-amber-500/10 flex items-center justify-center text-amber-400">
-            <Flame size={20} />
-          </div>
-          <div>
-            <p className="text-xs text-slate-400 font-medium">Mặt Sau (Back)</p>
-            <p className="text-xl font-bold text-amber-400">{stats.back}</p>
-          </div>
-        </div>
-      </div>
-
-      {/* FILTER & SEARCH BAR */}
-      <div className="card-gradient p-3.5 sm:p-4 rounded-2xl border border-slate-800 flex flex-col sm:flex-row gap-3 items-center justify-between">
-        {/* Search */}
-        <div className="relative w-full sm:w-80">
-          <Search
-            size={16}
-            className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500"
-          />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Tìm theo tên mẫu, từ khóa prompt..."
-            className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-4 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-brand-500"
-          />
-        </div>
-
-        {/* Filters */}
-        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
-          {/* Side Filter */}
-          <div className="flex p-1 bg-slate-900 rounded-xl border border-slate-800 text-xs">
-            <button
-              onClick={() => setSelectedSide("all")}
-              className={`px-3 py-1.5 rounded-lg font-medium transition-all ${
-                selectedSide === "all"
-                  ? "bg-brand-500 text-white shadow-sm"
-                  : "text-slate-400 hover:text-slate-200"
-              }`}
-            >
-              Tất cả mặt
-            </button>
-            <button
-              onClick={() => setSelectedSide("front")}
-              className={`px-3 py-1.5 rounded-lg font-medium transition-all ${
-                selectedSide === "front"
-                  ? "bg-brand-500 text-white shadow-sm"
-                  : "text-slate-400 hover:text-slate-200"
-              }`}
-            >
-              Mặt trước
-            </button>
-            <button
-              onClick={() => setSelectedSide("back")}
-              className={`px-3 py-1.5 rounded-lg font-medium transition-all ${
-                selectedSide === "back"
-                  ? "bg-brand-500 text-white shadow-sm"
-                  : "text-slate-400 hover:text-slate-200"
-              }`}
-            >
-              Mặt sau
-            </button>
-          </div>
-
-          {/* Category Filter */}
-          <select
-            value={selectedCategory}
-            onChange={(e) => setSelectedCategory(e.target.value)}
-            className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-300 focus:outline-none focus:border-brand-500"
-          >
-            <option value="all">Tất cả phong cách</option>
-            {categories
-              .filter((c) => c !== "all")
-              .map((cat) => (
-                <option key={cat} value={cat}>
-                  {cat}
-                </option>
-              ))}
-          </select>
         </div>
       </div>
 
       {/* PROMPTS GRID */}
       {loading ? (
-        <div className="text-center py-16 text-slate-500">Đang tải danh sách prompt...</div>
+        <div className="text-center py-16 text-slate-500 flex flex-col items-center gap-2">
+          <RefreshCw size={24} className="animate-spin text-brand-400" />
+          <p className="text-sm">Đang tải kho prompt AI...</p>
+        </div>
       ) : filtered.length === 0 ? (
-        <EmptyState
-          icon={Sparkles}
-          title="Chưa có mẫu prompt nào phù hợp"
-          description="Hãy tạo mẫu prompt mới hoặc bấm 'Nạp 12+ Mẫu Thịnh Hành' để nạp sẵn bộ prompt studio, streetwear chất lượng cao."
-          action={
-            <button onClick={handleResetDefaults} className="btn btn-primary mt-3 text-sm">
-              <RotateCcw size={16} /> Nạp mẫu có sẵn ngay
+        <div className="card-gradient rounded-2xl border border-slate-800 p-12 text-center flex flex-col items-center justify-center space-y-4">
+          <div className="w-14 h-14 rounded-2xl bg-brand-500/10 flex items-center justify-center text-brand-400">
+            <Sparkles size={28} />
+          </div>
+          <div>
+            <h4 className="text-base font-bold text-slate-200">Không tìm thấy mẫu prompt phù hợp</h4>
+            <p className="text-xs text-slate-400 max-w-md mt-1">
+              Thử tìm kiếm với từ khóa khác, thay đổi bộ lọc hoặc nạp bổ sung các mẫu prompt chuẩn có sẵn.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={handleResetDefaults} className="btn btn-primary text-xs sm:text-sm">
+              <RotateCcw size={15} /> Nạp 74 mẫu gốc ngay
             </button>
-          }
-        />
+          </div>
+        </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {filtered.map((item) => {
+          {filtered.map((item, idx) => {
             const isFront = item.side === "front";
             const isBack = item.side === "back";
-            const isAll = item.side === "all";
+            const modelType = detectModelType(item);
 
             return (
               <div
-                key={item.id}
+                key={item.id || idx}
                 className={`card-gradient rounded-2xl border p-4 sm:p-5 flex flex-col justify-between transition-all duration-200 ${
                   item.is_active
                     ? "border-slate-800 hover:border-slate-700 bg-slate-900/60"
@@ -702,8 +1135,24 @@ export function AIPromptsPage() {
                   {/* Card Header */}
                   <div className="flex items-start justify-between gap-3 mb-2.5">
                     <div className="flex items-center gap-2 flex-wrap">
+                      {/* Model Badge */}
+                      {modelType === "couple" ? (
+                        <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-purple-500/15 text-purple-300 border border-purple-500/30 flex items-center gap-1">
+                          <Users size={12} /> Cặp Nam & Nữ
+                        </span>
+                      ) : modelType === "female" ? (
+                        <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-pink-500/15 text-pink-300 border border-pink-500/30 flex items-center gap-1">
+                          <User size={12} /> Nữ (Female)
+                        </span>
+                      ) : modelType === "male" ? (
+                        <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 flex items-center gap-1">
+                          <User size={12} /> Nam (Male)
+                        </span>
+                      ) : null}
+
+                      {/* Side Badge */}
                       <span
-                        className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-medium border ${
                           isFront
                             ? "bg-sky-500/10 text-sky-400 border-sky-500/20"
                             : isBack
@@ -712,10 +1161,10 @@ export function AIPromptsPage() {
                         }`}
                       >
                         {isFront
-                          ? "👕 Mặt trước"
+                          ? "Mặt trước"
                           : isBack
-                          ? "👕 Mặt sau"
-                          : "🔄 Cả 2 mặt"}
+                          ? "Mặt sau"
+                          : "Cả 2 mặt"}
                       </span>
 
                       {item.category && (
@@ -753,7 +1202,7 @@ export function AIPromptsPage() {
                   </div>
 
                   {/* Title */}
-                  <h4 className="text-base font-bold text-slate-100 mb-2 leading-snug">
+                  <h4 className="text-sm sm:text-base font-bold text-slate-100 mb-2 leading-snug">
                     {item.title}
                   </h4>
 
@@ -817,6 +1266,144 @@ export function AIPromptsPage() {
         </div>
       )}
 
+      {/* EXCEL IMPORT PREVIEW MODAL */}
+      <Modal
+        open={importModalOpen}
+        onClose={() => setImportModalOpen(false)}
+        title="Xác Nhận Import Prompt Từ Excel"
+      >
+        <div className="space-y-4 max-h-[80vh] overflow-y-auto pr-1">
+          <div className="p-3.5 bg-emerald-950/30 border border-emerald-500/30 rounded-xl flex items-center gap-3">
+            <FileSpreadsheet size={24} className="text-emerald-400 shrink-0" />
+            <div>
+              <p className="text-xs text-slate-400">File đã chọn:</p>
+              <p className="text-sm font-bold text-slate-100">{importFileName}</p>
+              <p className="text-xs text-emerald-400 font-medium mt-0.5">
+                ✅ Đã phát hiện <span className="underline font-bold">{importPreview.length}</span> câu prompt hợp lệ
+              </p>
+            </div>
+          </div>
+
+          {/* Import Options */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 bg-slate-900/80 rounded-xl border border-slate-800">
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-1">
+                Chế độ Import:
+              </label>
+              <div className="space-y-1.5">
+                <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-200">
+                  <input
+                    type="radio"
+                    name="importMode"
+                    value="append"
+                    checked={importMode === "append"}
+                    onChange={() => setImportMode("append")}
+                    className="text-brand-500 focus:ring-0 bg-slate-900 border-slate-700"
+                  />
+                  <span>
+                    <strong>Nạp thêm</strong> (Giữ nguyên danh sách hiện có)
+                  </span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer text-xs text-rose-300">
+                  <input
+                    type="radio"
+                    name="importMode"
+                    value="replace"
+                    checked={importMode === "replace"}
+                    onChange={() => setImportMode("replace")}
+                    className="text-rose-500 focus:ring-0 bg-slate-900 border-slate-700"
+                  />
+                  <span>
+                    <strong>Ghi đè tất cả</strong> (Xóa hết mẫu cũ & nạp mới)
+                  </span>
+                </label>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-1">
+                Danh mục mặc định:
+              </label>
+              <input
+                type="text"
+                value={defaultImportCategory}
+                onChange={(e) => setDefaultImportCategory(e.target.value)}
+                placeholder="Cặp đôi / Couple, Studio..."
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-brand-500"
+              />
+            </div>
+          </div>
+
+          {/* Preview Table */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+              Xem trước các câu prompt sẽ được import:
+            </label>
+            <div className="border border-slate-800 rounded-xl overflow-hidden max-h-60 overflow-y-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead className="bg-slate-900 text-slate-400 sticky top-0 border-b border-slate-800">
+                  <tr>
+                    <th className="p-2.5 w-10 text-center">#</th>
+                    <th className="p-2.5">Tiêu đề / Bối cảnh</th>
+                    <th className="p-2.5">Category</th>
+                    <th className="p-2.5 w-20">Mặt</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60 bg-slate-950">
+                  {importPreview.map((row, idx) => (
+                    <tr key={idx} className="hover:bg-slate-900/40">
+                      <td className="p-2.5 text-center text-slate-500 font-mono">{idx + 1}</td>
+                      <td className="p-2.5 text-slate-200 font-medium">
+                        <div>{row.title}</div>
+                        <div className="text-[10px] text-slate-500 line-clamp-1 font-mono mt-0.5">
+                          {row.prompt.slice(0, 80)}...
+                        </div>
+                      </td>
+                      <td className="p-2.5 text-slate-400">{row.category || defaultImportCategory}</td>
+                      <td className="p-2.5 text-slate-400">
+                        <span className="px-1.5 py-0.5 rounded text-[10px] bg-slate-800">
+                          {row.side}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Modal Actions */}
+          <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+            <button
+              type="button"
+              onClick={() => setImportModalOpen(false)}
+              className="btn btn-secondary text-xs sm:text-sm"
+              disabled={importLoading}
+            >
+              Hủy
+            </button>
+            <button
+              type="button"
+              onClick={handleExecuteImport}
+              className="btn btn-primary text-xs sm:text-sm flex items-center gap-1.5"
+              disabled={importLoading}
+            >
+              {importLoading ? (
+                <>
+                  <RefreshCw size={14} className="animate-spin" />
+                  <span>Đang Import...</span>
+                </>
+              ) : (
+                <>
+                  <FileSpreadsheet size={15} />
+                  <span>Tiến Hành Import ({importPreview.length} Mẫu)</span>
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
       {/* CREATE / EDIT MODAL */}
       <Modal
         open={modalOpen}
@@ -846,7 +1433,7 @@ export function AIPromptsPage() {
                 type="text"
                 value={form.category}
                 onChange={(e) => setForm({ ...form, category: e.target.value })}
-                placeholder="Studio, Streetwear, Lifestyle, Flat Lay, Vintage..."
+                placeholder="Studio, Streetwear, Lifestyle, Cặp đôi / Couple..."
                 className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-brand-500"
               />
             </div>

@@ -33,6 +33,8 @@ import {
   Copy,
   Bot,
   ZoomIn,
+  Users,
+  User,
 } from "lucide-react";
 import { formatCurrency, uploadFile, formatColorName } from "@/lib/helpers";
 import { loadImageWithR2Priority } from "@/lib/r2Storage";
@@ -2263,11 +2265,12 @@ function MasterGroupMediaModal({
   const [copiedImageIdx, setCopiedImageIdx] = useState<number | null>(null);
   const [copiedPromptIdx, setCopiedPromptIdx] = useState<number | null>(null);
   const [copiedPromptTitle, setCopiedPromptTitle] = useState<string | null>(null);
+  const [selectedPromptByVariant, setSelectedPromptByVariant] = useState<Record<number, string>>({});
 
   // Danh sách các mẫu AI Prompt (đồng bộ từ Supabase/localStorage hoặc mặc định)
   const [aiPromptsList, setAiPromptsList] = useState<AIPrompt[]>(() => {
     try {
-      const cached = localStorage.getItem("sanpham_ai_prompts_cache_v3");
+      const cached = localStorage.getItem("sanpham_ai_prompts_cache_v4") || localStorage.getItem("sanpham_ai_prompts_cache_v3");
       if (cached) {
         const parsed = JSON.parse(cached);
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
@@ -2290,7 +2293,7 @@ function MasterGroupMediaModal({
           .order("created_at", { ascending: true });
         if (!error && data && data.length > 0) {
           setAiPromptsList(data as AIPrompt[]);
-          localStorage.setItem("sanpham_ai_prompts_cache_v3", JSON.stringify(data));
+          localStorage.setItem("sanpham_ai_prompts_cache_v4", JSON.stringify(data));
         }
       } catch (err) {
         console.warn("Không thể tải ai_prompts từ Supabase:", err);
@@ -2298,6 +2301,41 @@ function MasterGroupMediaModal({
     }
     loadAiPrompts();
   }, []);
+
+  // Phân loại các prompt vào các nhóm để hiển thị trong combobox
+  const groupedPrompts = useMemo(() => {
+    const targetSide = isBack ? "back" : "front";
+    const activeList = aiPromptsList.filter(
+      (p) => p.is_active !== false && (p.side === targetSide || p.side === "all")
+    );
+    const list = activeList.length > 0 ? activeList : aiPromptsList;
+
+    const couples: AIPrompt[] = [];
+    const females: AIPrompt[] = [];
+    const males: AIPrompt[] = [];
+    const others: AIPrompt[] = [];
+
+    list.forEach((p) => {
+      const t = (p.title + " " + p.prompt).toLowerCase();
+      if (
+        t.includes("cặp") ||
+        t.includes("couple") ||
+        t.includes("asian models") ||
+        t.includes("both models") ||
+        t.includes("two young adult")
+      ) {
+        couples.push(p);
+      } else if (t.includes("female") || t.includes("mẫu nữ") || t.includes("nữ")) {
+        females.push(p);
+      } else if (t.includes("male") || t.includes("mẫu nam") || t.includes("nam")) {
+        males.push(p);
+      } else {
+        others.push(p);
+      }
+    });
+
+    return { couples, females, males, others };
+  }, [aiPromptsList, isBack]);
 
   // Copy hình ảnh phôi vào clipboard để dán vào ChatGPT (Ctrl+V)
   async function handleCopyImage(rawImageUrl: string | null | undefined, idx: number) {
@@ -2362,29 +2400,37 @@ function MasterGroupMediaModal({
     }
   }
 
-  // Copy câu Prompt ngẫu nhiên từ kho mẫu AI Prompt (lọc theo mặt trước / mặt sau và thay thế biến)
-  async function handleCopyPrompt(colorName: string, idx: number) {
+  // Copy câu Prompt (ngẫu nhiên hoặc từ combobox đã chọn)
+  async function handleCopyPrompt(colorName: string, idx: number, specificPromptId?: string) {
     const targetSide = isBack ? "back" : "front";
+    let chosenPrompt: AIPrompt | undefined;
 
-    // Lọc mẫu prompt phù hợp theo side (front / back hoặc all)
-    let eligible = aiPromptsList.filter(
-      (p) => p.is_active !== false && (p.side === targetSide || p.side === "all")
-    );
+    const promptIdToUse = specificPromptId || selectedPromptByVariant[idx];
 
-    if (eligible.length === 0) {
-      eligible = aiPromptsList.filter((p) => p.is_active !== false);
-    }
-    if (eligible.length === 0) {
-      eligible = DEFAULT_AI_PROMPTS.map((p, i) => ({
-        ...p,
-        id: `def-${i}`,
-      }));
+    if (promptIdToUse && promptIdToUse !== "random") {
+      chosenPrompt = aiPromptsList.find((p) => String(p.id) === String(promptIdToUse));
     }
 
-    // Lấy ngẫu nhiên 1 câu prompt từ mẫu AI
-    const randomItem = eligible[Math.floor(Math.random() * eligible.length)];
-    const rawTemplate = randomItem?.prompt || "";
+    if (!chosenPrompt) {
+      // Lọc mẫu prompt phù hợp theo side (front / back hoặc all)
+      let eligible = aiPromptsList.filter(
+        (p) => p.is_active !== false && (p.side === targetSide || p.side === "all")
+      );
 
+      if (eligible.length === 0) {
+        eligible = aiPromptsList.filter((p) => p.is_active !== false);
+      }
+      if (eligible.length === 0) {
+        eligible = DEFAULT_AI_PROMPTS.map((p, i) => ({
+          ...p,
+          id: `def-${i}`,
+        }));
+      }
+
+      chosenPrompt = eligible[Math.floor(Math.random() * eligible.length)];
+    }
+
+    const rawTemplate = chosenPrompt?.prompt || "";
     if (!rawTemplate.trim()) {
       alert("Không tìm thấy mẫu prompt nào!");
       return;
@@ -2396,16 +2442,18 @@ function MasterGroupMediaModal({
       .replace(/{design_name}/gi, group?.print_design?.name || group?.master_name || "Họa tiết")
       .replace(/{side}/gi, isBack ? "mặt sau" : "mặt trước");
 
-    // Nối thêm đoạn đầu câu: Asian model, Vietnamese
-    const prefix = "Asian model, Vietnamese, ";
-    if (!processedPrompt.toLowerCase().startsWith("asian model, vietnamese")) {
-      processedPrompt = prefix + processedPrompt;
+    // Nối thêm đoạn đầu câu: Asian model, Vietnamese nếu chưa có
+    if (
+      !processedPrompt.toLowerCase().startsWith("asian model") &&
+      !processedPrompt.toLowerCase().startsWith("asian models")
+    ) {
+      processedPrompt = "Asian model, Vietnamese, " + processedPrompt;
     }
 
     try {
       await navigator.clipboard.writeText(processedPrompt);
       setCopiedPromptIdx(idx);
-      setCopiedPromptTitle(randomItem.title || "Mẫu AI Prompt");
+      setCopiedPromptTitle(chosenPrompt?.title || "Mẫu AI Prompt");
       setTimeout(() => {
         setCopiedPromptIdx(null);
         setCopiedPromptTitle(null);
@@ -2502,12 +2550,12 @@ function MasterGroupMediaModal({
 
   return (
     <>
-      <Modal open={true} onClose={onClose} title={`🎬 Album Media & Phôi Màu AI: ${group?.master_name || "Sản phẩm"}`} size="2xl" zIndex="z-[60]">
+      <Modal open={true} onClose={onClose} title={`🎬 Album Media & Phôi Màu AI: ${group?.master_name || "Sản phẩm"}`} size="5xl" zIndex="z-[60]">
         <div className="space-y-4">
           {/* Top 2-Column Grid: Left is Massive Viewer, Right is Colors & Album */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
             
-            {/* CỘT TRÁI (7 CỘT): MÀN HÌNH XEM MEDIA SIÊU TO KHỔNG LỒ */}
+            {/* CỘT TRÁI (7 CỘT): MÀN HÌNH XEM MEDIA SIÊU TO KHỔNG LỒ & DÀI RỘNG */}
             <div className="lg:col-span-7 space-y-2">
               <div className="flex items-center justify-between px-1">
                 <label className="text-xs font-bold text-slate-200 uppercase tracking-wide flex items-center gap-1.5">
@@ -2526,7 +2574,7 @@ function MasterGroupMediaModal({
               </div>
 
               {/* KHUNG ẢNH TO / VIDEO PLAYER */}
-              <div className="w-full h-[380px] sm:h-[460px] lg:h-[530px] rounded-2xl bg-gradient-to-b from-slate-950 to-slate-900 border border-slate-700/80 overflow-hidden relative flex items-center justify-center shadow-2xl group">
+              <div className="w-full h-[450px] sm:h-[530px] lg:h-[620px] rounded-2xl bg-gradient-to-b from-slate-950 to-slate-900 border border-slate-700/80 overflow-hidden relative flex items-center justify-center shadow-2xl group">
                 {currentMediaUrl ? (
                   isCurrentVideo ? (
                     <video src={currentMediaUrl} controls autoPlay className="w-full h-full object-contain" />
@@ -2556,7 +2604,7 @@ function MasterGroupMediaModal({
             </div>
 
             {/* CỘT PHẢI (5 CỘT): PHÔI THEO MÀU & ALBUM MEDIA */}
-            <div className="lg:col-span-5 space-y-3.5 max-h-[570px] overflow-y-auto pr-1">
+            <div className="lg:col-span-5 space-y-3.5 max-h-[660px] overflow-y-auto pr-1">
               {/* SECTION 1: CÁC PHÔI THEO MÀU & COPY PROMPT */}
               <div className="p-3 sm:p-3.5 rounded-2xl bg-slate-850 border border-slate-700/70 shadow-md space-y-2.5">
                 <div className="flex items-center justify-between pb-2 border-b border-slate-700/50">
@@ -2566,12 +2614,12 @@ function MasterGroupMediaModal({
                       Phôi Màu & Prompt AI
                     </h4>
                   </div>
-                  <div className="text-[11px] px-2 py-0.5 rounded-full font-bold border bg-slate-900 border-slate-700">
+                  <div className="text-[11px] px-2.5 py-0.5 rounded-full font-bold border bg-slate-900 border-slate-700">
                     {isBack ? <span className="text-purple-400">🔙 Mặt sau</span> : <span className="text-sky-400">👕 Mặt trước</span>}
                   </div>
                 </div>
 
-                <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
+                <div className="space-y-2.5 max-h-[350px] sm:max-h-[380px] overflow-y-auto pr-1">
                   {colorSubGroups.map((cg, idx) => {
                     const colorName = formatColorName(cg.color);
                     const colorObj = (colorsList || []).find(
@@ -2587,93 +2635,182 @@ function MasterGroupMediaModal({
                       toMediaUrl(cg.preview_url) ||
                       toMediaUrl(cg.variants?.find((v) => v.preview_url)?.preview_url) ||
                       targetBlankImg;
-                    const targetPrompt = isBack ? colorObj?.prompt_back : colorObj?.prompt_front;
 
                     const isSelected = currentMediaUrl === targetProductImg;
                     const isCopyingImg = copyingImageIdx === idx;
                     const isCopiedImg = copiedImageIdx === idx;
                     const isCopiedPrompt = copiedPromptIdx === idx;
+                    const curPromptVal = selectedPromptByVariant[idx] || "random";
 
                     return (
                       <div
                         key={idx}
                         onClick={() => targetProductImg && setSelectedMedia(targetProductImg)}
-                        className={`flex items-center gap-2.5 p-2 rounded-xl bg-slate-900/80 border transition-all cursor-pointer ${
+                        className={`flex flex-col gap-2 p-2.5 rounded-xl bg-slate-900/85 border transition-all cursor-pointer ${
                           isSelected
                             ? "border-brand-500 ring-2 ring-brand-500/30 bg-brand-950/20"
                             : "border-slate-700/80 hover:border-slate-600 hover:bg-slate-800/60"
                         }`}
                       >
-                        {/* Thumbnail to hơn */}
-                        <div className="w-13 h-13 sm:w-14 sm:h-14 rounded-lg bg-slate-950 border border-slate-700/80 overflow-hidden shrink-0 relative flex items-center justify-center">
-                          {targetProductImg ? (
-                            <img src={targetProductImg} alt="" className="w-full h-full object-contain" />
-                          ) : (
-                            <span className="text-[10px] text-slate-500">No img</span>
-                          )}
-                        </div>
-
-                        {/* Thông tin màu & Nút copy */}
-                        <div className="min-w-0 flex-1 flex flex-col justify-center gap-1.5">
-                          <div className="flex items-center gap-1.5 min-w-0">
-                            <span
-                              className="w-3 h-3 rounded-full border border-slate-500 shrink-0 shadow-sm"
-                              style={{ background: colorObj?.hex || "#ccc" }}
-                            />
-                            <span className="text-xs font-bold text-slate-200 truncate">
-                              {colorName}
-                            </span>
-                            {colorObj?.code && (
-                              <span className="text-[10px] font-mono text-brand-400 bg-brand-500/10 px-1.5 py-0.2 rounded border border-brand-500/20">
-                                {colorObj.code}
-                              </span>
+                        {/* Hàng 1: Thumbnail + Tên màu + Nút Copy Ảnh & Nút Random Prompt */}
+                        <div className="flex items-center gap-2.5">
+                          {/* Thumbnail */}
+                          <div className="w-12 h-12 rounded-lg bg-slate-950 border border-slate-700/80 overflow-hidden shrink-0 relative flex items-center justify-center">
+                            {targetProductImg ? (
+                              <img src={targetProductImg} alt="" className="w-full h-full object-contain" />
+                            ) : (
+                              <span className="text-[10px] text-slate-500">No img</span>
                             )}
                           </div>
 
-                          <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-                            <button
-                              type="button"
-                              onClick={() => handleCopyImage(targetProductImg, idx)}
-                              disabled={isCopyingImg}
-                              className={`flex-1 flex items-center justify-center gap-1 py-1 px-1.5 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
-                                isCopiedImg
-                                  ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
-                                  : "bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 hover:border-slate-600"
-                              }`}
-                              title="Copy ảnh sản phẩm (đã ghép) để dán (Ctrl+V) vào ChatGPT"
-                            >
-                              {isCopyingImg ? (
-                                <Loader2 size={11} className="animate-spin text-brand-400" />
-                              ) : isCopiedImg ? (
-                                <Check size={11} className="text-emerald-400" />
-                              ) : (
-                                <Copy size={11} className="text-sky-400" />
+                          {/* Thông tin màu & 2 nút thao tác chính */}
+                          <div className="min-w-0 flex-1 flex flex-col justify-center gap-1.5">
+                            <div className="flex items-center justify-between gap-1.5 min-w-0">
+                              <div className="flex items-center gap-1.5 truncate">
+                                <span
+                                  className="w-3 h-3 rounded-full border border-slate-500 shrink-0 shadow-sm"
+                                  style={{ background: colorObj?.hex || "#ccc" }}
+                                />
+                                <span className="text-xs font-bold text-slate-200 truncate">
+                                  {colorName}
+                                </span>
+                              </div>
+                              {colorObj?.code && (
+                                <span className="text-[10px] font-mono text-brand-400 bg-brand-500/10 px-1.5 py-0.2 rounded border border-brand-500/20 shrink-0">
+                                  {colorObj.code}
+                                </span>
                               )}
-                              <span className="truncate">{isCopiedImg ? "Đã copy" : "Copy ảnh SP"}</span>
-                            </button>
+                            </div>
 
-                            <button
-                              type="button"
-                              onClick={() => handleCopyPrompt(colorName, idx)}
-                              className={`flex-1 flex items-center justify-center gap-1 py-1 px-1.5 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
-                                isCopiedPrompt
-                                  ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
-                                  : "bg-brand-500/15 hover:bg-brand-500/25 text-brand-300 border border-brand-500/30 hover:border-brand-500/50"
-                              }`}
-                              title={
-                                isCopiedPrompt && copiedPromptTitle
-                                  ? `Đã copy: ${copiedPromptTitle}`
-                                  : "Lấy ngẫu nhiên 1 câu Prompt từ kho mẫu AI Prompts cho màu này"
-                              }
-                            >
-                              {isCopiedPrompt ? (
-                                <Check size={11} className="text-emerald-400" />
-                              ) : (
-                                <Sparkles size={11} className="text-amber-400" />
-                              )}
-                              <span className="truncate">{isCopiedPrompt ? "Đã copy AI" : "Copy prompt AI"}</span>
-                            </button>
+                            <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                              <button
+                                type="button"
+                                onClick={() => handleCopyImage(targetProductImg, idx)}
+                                disabled={isCopyingImg}
+                                className={`flex-1 flex items-center justify-center gap-1 py-1 px-1.5 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
+                                  isCopiedImg
+                                    ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                                    : "bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 hover:border-slate-600"
+                                }`}
+                                title="Copy ảnh sản phẩm (đã ghép) để dán (Ctrl+V) vào ChatGPT"
+                              >
+                                {isCopyingImg ? (
+                                  <Loader2 size={11} className="animate-spin text-brand-400" />
+                                ) : isCopiedImg ? (
+                                  <Check size={11} className="text-emerald-400" />
+                                ) : (
+                                  <Copy size={11} className="text-sky-400" />
+                                )}
+                                <span className="truncate">{isCopiedImg ? "Đã copy ảnh" : "Copy ảnh SP"}</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => handleCopyPrompt(colorName, idx, "random")}
+                                className={`flex-1 flex items-center justify-center gap-1 py-1 px-1.5 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
+                                  isCopiedPrompt && curPromptVal === "random"
+                                    ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                                    : "bg-brand-500/15 hover:bg-brand-500/25 text-brand-300 border border-brand-500/30 hover:border-brand-500/50"
+                                }`}
+                                title={
+                                  isCopiedPrompt && copiedPromptTitle
+                                    ? `Đã copy: ${copiedPromptTitle}`
+                                    : "Bốc ngẫu nhiên 1 câu Prompt từ kho mẫu AI Prompts cho màu này"
+                                }
+                              >
+                                {isCopiedPrompt && curPromptVal === "random" ? (
+                                  <Check size={11} className="text-emerald-400" />
+                                ) : (
+                                  <Sparkles size={11} className="text-amber-400" />
+                                )}
+                                <span className="truncate">{isCopiedPrompt && curPromptVal === "random" ? "Đã chép ngẫu nhiên" : "🎲 Random AI"}</span>
+                              </button>
+                            </div>
                           </div>
+                        </div>
+
+                        {/* Hàng 2: COMBOBOX CHỌN MẪU PROMPT CỤ THỂ + NÚT COPY MẪU */}
+                        <div
+                          className="flex items-center gap-1.5 pt-1 border-t border-slate-800/80"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <select
+                            value={curPromptVal}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setSelectedPromptByVariant((prev) => ({ ...prev, [idx]: val }));
+                              if (val && val !== "random") {
+                                handleCopyPrompt(colorName, idx, val);
+                              }
+                            }}
+                            className="flex-1 bg-slate-950 text-slate-200 text-[11px] border border-slate-700/90 rounded-lg px-2 py-1 outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 truncate"
+                            title="Chọn mẫu Prompt cụ thể theo bối cảnh hoặc model"
+                          >
+                            <option value="random">🎯 Chọn mẫu Prompt cụ thể (hoặc Random)...</option>
+                            
+                            {groupedPrompts.couples.length > 0 && (
+                              <optgroup label={`👫 Cặp Nam & Nữ (${groupedPrompts.couples.length} mẫu)`}>
+                                {groupedPrompts.couples.map((p) => (
+                                  <option key={p.id} value={p.id}>
+                                    {p.title}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            )}
+
+                            {groupedPrompts.females.length > 0 && (
+                              <optgroup label={`👩 Mẫu Nữ / Female (${groupedPrompts.females.length} mẫu)`}>
+                                {groupedPrompts.females.map((p) => (
+                                  <option key={p.id} value={p.id}>
+                                    {p.title}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            )}
+
+                            {groupedPrompts.males.length > 0 && (
+                              <optgroup label={`👨 Mẫu Nam / Male (${groupedPrompts.males.length} mẫu)`}>
+                                {groupedPrompts.males.map((p) => (
+                                  <option key={p.id} value={p.id}>
+                                    {p.title}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            )}
+
+                            {groupedPrompts.others.length > 0 && (
+                              <optgroup label={`✨ Mẫu Khác (${groupedPrompts.others.length} mẫu)`}>
+                                {groupedPrompts.others.map((p) => (
+                                  <option key={p.id} value={p.id}>
+                                    {p.title}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            )}
+                          </select>
+
+                          <button
+                            type="button"
+                            onClick={() => handleCopyPrompt(colorName, idx, curPromptVal)}
+                            className={`px-2 py-1 rounded-lg text-[11px] font-semibold flex items-center gap-1 transition-all shrink-0 cursor-pointer shadow-sm ${
+                              isCopiedPrompt && curPromptVal !== "random"
+                                ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                                : "bg-brand-600 hover:bg-brand-500 text-white border border-brand-500/40"
+                            }`}
+                            title="Sao chép câu Prompt theo mẫu đã chọn trong combobox"
+                          >
+                            {isCopiedPrompt && curPromptVal !== "random" ? (
+                              <>
+                                <Check size={11} className="text-emerald-400" />
+                                <span>Đã chép</span>
+                              </>
+                            ) : (
+                              <>
+                                <Copy size={11} />
+                                <span>Copy</span>
+                              </>
+                            )}
+                          </button>
                         </div>
                       </div>
                     );

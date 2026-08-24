@@ -7,7 +7,7 @@ interface ModalProps {
   onClose: () => void;
   title: string;
   children: ReactNode;
-  size?: "sm" | "md" | "lg" | "xl" | "2xl";
+  size?: "sm" | "md" | "lg" | "xl" | "2xl" | "3xl" | "4xl" | "5xl" | "6xl" | "full";
   zIndex?: string;
 }
 
@@ -36,6 +36,11 @@ export function Modal({ open, isOpen, onClose, title, children, size = "md", zIn
     lg: "max-w-4xl",
     xl: "max-w-5xl",
     "2xl": "max-w-6xl",
+    "3xl": "max-w-7xl",
+    "4xl": "max-w-[90rem]",
+    "5xl": "max-w-[100rem]",
+    "6xl": "max-w-[110rem]",
+    full: "max-w-[97vw]",
   }[size || "md"];
 
   return (
