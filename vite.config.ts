@@ -68,9 +68,25 @@ function ecommerceDevApiPlugin(): Plugin {
   };
 }
 
+// Plugin to strip broken sourcemap references from lucide-react (prevents 0-byte .map parse errors)
+function cleanLucideSourceMapPlugin(): Plugin {
+  return {
+    name: 'clean-lucide-sourcemap',
+    enforce: 'pre',
+    transform(code, id) {
+      if (id.includes('lucide-react')) {
+        return {
+          code: code.replace(/\/\/#\s*sourceMappingURL=.*/g, ''),
+          map: null,
+        };
+      }
+    },
+  };
+}
+
 // https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [react(), ecommerceDevApiPlugin()],
+  plugins: [react(), ecommerceDevApiPlugin(), cleanLucideSourceMapPlugin()],
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
@@ -78,5 +94,8 @@ export default defineConfig({
   },
   optimizeDeps: {
     exclude: ['lucide-react'],
+  },
+  build: {
+    sourcemap: false,
   },
 });

@@ -214,33 +214,52 @@ async function normalizeShopeeAttributes(
     }
   }
 
-  // Kéo danh sách thuộc tính chuẩn của ngành hàng từ Shopee API
+  // Kéo danh sách thuộc tính chuẩn của ngành hàng từ Shopee API (Ưu tiên get_attribute_tree mới nhất)
   try {
-    const attrPath = "/api/v2/product/get_attributes";
-    const timestamp = Math.floor(Date.now() / 1000);
-    const sign = generateShopeeSignature(partnerId, partnerKey, attrPath, timestamp, accessToken, shopId);
-    const url = `${host}${attrPath}?partner_id=${Number(partnerId)}&timestamp=${timestamp}&access_token=${accessToken}&shop_id=${Number(shopId)}&sign=${sign}&category_id=${Number(categoryId)}&language=vi`;
-    const res = await fetch(url);
-    const data = await safeFetchJson(res);
-    let shopeeAttrs = data.response?.attribute_list || [];
+    let shopeeAttrs: any[] = [];
+    const treePath = "/api/v2/product/get_attribute_tree";
+    const tsTree = Math.floor(Date.now() / 1000);
+    const signTree = generateShopeeSignature(partnerId, partnerKey, treePath, tsTree, accessToken, shopId);
+    const urlTree = `${host}${treePath}?partner_id=${Number(partnerId)}&timestamp=${tsTree}&access_token=${accessToken}&shop_id=${Number(shopId)}&sign=${signTree}&category_id=${Number(categoryId)}&language=vi`;
+    
+    try {
+      const resTree = await fetch(urlTree);
+      const dataTree = await safeFetchJson(resTree);
+      shopeeAttrs = dataTree.response?.attribute_list || [];
+      debugInfo.rawShopeeResponse = {
+        api: "get_attribute_tree",
+        error: dataTree.error || null,
+        message: dataTree.message || null,
+        attrCount: shopeeAttrs.length,
+        categoryId,
+      };
+    } catch (eTree: any) {
+      debugInfo.rawShopeeResponse = { api: "get_attribute_tree_err", err: String(eTree) };
+    }
 
-    debugInfo.rawShopeeResponse = {
-      error: data.error || null,
-      message: data.message || null,
-      attrCount: shopeeAttrs.length,
-      categoryId,
-    };
-
-    // Retry without language param if empty
+    // Thử lại không truyền language nếu rỗng
     if (shopeeAttrs.length === 0) {
-      const ts2 = Math.floor(Date.now() / 1000);
-      const sign2 = generateShopeeSignature(partnerId, partnerKey, attrPath, ts2, accessToken, shopId);
-      const url2 = `${host}${attrPath}?partner_id=${Number(partnerId)}&timestamp=${ts2}&access_token=${accessToken}&shop_id=${Number(shopId)}&sign=${sign2}&category_id=${Number(categoryId)}`;
-      const res2 = await fetch(url2);
-      const data2 = await safeFetchJson(res2);
-      shopeeAttrs = data2.response?.attribute_list || [];
-      debugInfo.rawShopeeResponse.retryAttrCount = shopeeAttrs.length;
-      debugInfo.rawShopeeResponse.retryError = data2.error || null;
+      try {
+        const ts2 = Math.floor(Date.now() / 1000);
+        const sign2 = generateShopeeSignature(partnerId, partnerKey, treePath, ts2, accessToken, shopId);
+        const url2 = `${host}${treePath}?partner_id=${Number(partnerId)}&timestamp=${ts2}&access_token=${accessToken}&shop_id=${Number(shopId)}&sign=${sign2}&category_id=${Number(categoryId)}`;
+        const res2 = await fetch(url2);
+        const data2 = await safeFetchJson(res2);
+        shopeeAttrs = data2.response?.attribute_list || [];
+      } catch {}
+    }
+
+    // Fallback sang API cũ get_attributes nếu get_attribute_tree không trả về
+    if (shopeeAttrs.length === 0) {
+      try {
+        const oldPath = "/api/v2/product/get_attributes";
+        const ts3 = Math.floor(Date.now() / 1000);
+        const sign3 = generateShopeeSignature(partnerId, partnerKey, oldPath, ts3, accessToken, shopId);
+        const url3 = `${host}${oldPath}?partner_id=${Number(partnerId)}&timestamp=${ts3}&access_token=${accessToken}&shop_id=${Number(shopId)}&sign=${sign3}&category_id=${Number(categoryId)}&language=vi`;
+        const res3 = await fetch(url3);
+        const data3 = await safeFetchJson(res3);
+        shopeeAttrs = data3.response?.attribute_list || [];
+      } catch {}
     }
 
     // Log tất cả tên thuộc tính Shopee trả về
@@ -251,6 +270,7 @@ async function normalizeShopeeAttributes(
         disp: sAttr.display_attribute_name,
         mandatory: sAttr.is_mandatory,
         inputType: sAttr.input_type,
+        validationType: sAttr.input_validation_type,
         valueCount: (sAttr.attribute_value_list || []).length,
       });
     }
@@ -291,21 +311,21 @@ async function normalizeShopeeAttributes(
       }
 
       // Bỏ qua Brand trong attribute_list nếu Shopee yêu cầu truyền qua brand object
-      if ((origName === "brand" || dispName === "thương hiệu") && sAttr.input_type !== "DROP_DOWN") {
+      if ((origName === "brand" || dispName === "thương hiệu") && sAttr.input_type !== 1 && sAttr.input_type !== "DROP_DOWN") {
         debugInfo.matchResults.push({ attrId, origName, dispName, skipped: "brand", userVal });
         continue;
       }
 
       if (userVal) {
-        // Tìm value_id chính xác trong danh sách giá trị của Shopee
         let matchedValueId = 0;
         let finalValueName = userVal;
         const uValLower = userVal.toLowerCase().trim();
         let valueMatchMethod = "none";
+        const valList = sAttr.attribute_value_list || [];
 
-        if (Array.isArray(sAttr.attribute_value_list) && sAttr.attribute_value_list.length > 0) {
-          // 1. Khớp chính xác tên
-          let valMatch = sAttr.attribute_value_list.find(
+        // 1. Khớp chính xác tên
+        if (Array.isArray(valList) && valList.length > 0) {
+          let valMatch = valList.find(
             (v: any) =>
               (v.original_value_name && v.original_value_name.toLowerCase().trim() === uValLower) ||
               (v.display_value_name && v.display_value_name.toLowerCase().trim() === uValLower)
@@ -315,7 +335,7 @@ async function normalizeShopeeAttributes(
           if (!valMatch) {
             for (const [stdVal, valSyns] of Object.entries(FASHION_VAL_SYNONYMS)) {
               if (uValLower === stdVal || valSyns.includes(uValLower)) {
-                valMatch = sAttr.attribute_value_list.find((v: any) => {
+                valMatch = valList.find((v: any) => {
                   const oName = (v.original_value_name || "").toLowerCase().trim();
                   const dName = (v.display_value_name || "").toLowerCase().trim();
                   return valSyns.some((syn) => oName === syn || dName === syn || oName.includes(syn) || dName.includes(syn));
@@ -332,7 +352,7 @@ async function normalizeShopeeAttributes(
 
           // 3. Khớp chuỗi con
           if (!valMatch) {
-            valMatch = sAttr.attribute_value_list.find(
+            valMatch = valList.find(
               (v: any) =>
                 (v.original_value_name && (v.original_value_name.toLowerCase().includes(uValLower) || uValLower.includes(v.original_value_name.toLowerCase()))) ||
                 (v.display_value_name && (v.display_value_name.toLowerCase().includes(uValLower) || uValLower.includes(v.display_value_name.toLowerCase())))
@@ -340,9 +360,73 @@ async function normalizeShopeeAttributes(
             if (valMatch) valueMatchMethod = "substring";
           }
 
+          // 4. Xử lý đặc thù cho các thuộc tính Boolean (Petite, Cropped Top, Plus Size, v.v.)
+          if (!valMatch) {
+            const isBooleanAttr = origName.includes("petite") || dispName.includes("petite") || dispName.includes("dáng người nhỏ") ||
+                                  origName.includes("cropped") || dispName.includes("lửng") || dispName.includes("croptop") ||
+                                  origName.includes("plus size") || dispName.includes("ngoại cỡ");
+
+            if (isBooleanAttr) {
+              const isNegative = ["không", "no", "false", "không có", "n/a", "none", "0"].includes(uValLower);
+              const isPositive = ["có", "yes", "true", "có sẵn", "1"].includes(uValLower);
+
+              if (isNegative) {
+                valMatch = valList.find((v: any) => {
+                  const o = (v.original_value_name || "").toLowerCase().trim();
+                  const d = (v.display_value_name || "").toLowerCase().trim();
+                  return o === "no" || d === "không" || o === "false" || o.includes("no") || d.includes("không");
+                });
+                if (!valMatch) {
+                  // Known standard value_ids
+                  if (origName.includes("petite") || attrId === 100161) matchedValueId = 1446;
+                  if (origName.includes("cropped") || attrId === 100150) matchedValueId = 1359;
+                }
+              } else if (isPositive) {
+                valMatch = valList.find((v: any) => {
+                  const o = (v.original_value_name || "").toLowerCase().trim();
+                  const d = (v.display_value_name || "").toLowerCase().trim();
+                  return o === "yes" || d === "có" || o === "true" || o.includes("yes") || d.includes("có");
+                });
+                if (!valMatch) {
+                  if (origName.includes("petite") || attrId === 100161) matchedValueId = 1445;
+                  if (origName.includes("cropped") || attrId === 100150) matchedValueId = 1358;
+                }
+              }
+            }
+          }
+
           if (valMatch) {
             matchedValueId = Number(valMatch.value_id || 0);
             finalValueName = valMatch.original_value_name || valMatch.display_value_name || userVal;
+          }
+        }
+
+        // Kiểm tra xem thuộc tính có cho phép nhập tùy chỉnh (Custom Text / Free Text) không
+        // input_type trong Shopee API: 1=SINGLE_DROP_DOWN (Fixed), 2=SINGLE_COMBO_BOX (Custom ok), 3=FREE_TEXT_FIELD, 4=MULTI_DROP_DOWN, 5=MULTI_COMBO_BOX
+        const isStrictFixedDropdown = 
+          sAttr.input_type === 1 || 
+          sAttr.input_type === 4 || 
+          sAttr.input_type === "DROP_DOWN" || 
+          sAttr.input_type === "MULTI_DROP_DOWN" ||
+          sAttr.input_validation_type === "NOT_CUSTOMIZABLE" || 
+          sAttr.input_validation_type === "ENUM_TYPE";
+
+        // Nếu thuộc tính là Dropdown cố định và không tìm thấy value_id hợp lệ
+        if (isStrictFixedDropdown && (!matchedValueId || matchedValueId <= 0)) {
+          if (sAttr.is_mandatory && Array.isArray(valList) && valList.length > 0) {
+            // Nếu là bắt buộc, lấy giá trị đầu tiên trong danh sách để không lỗi Shopee
+            matchedValueId = Number(valList[0].value_id || 0);
+            finalValueName = valList[0].original_value_name || valList[0].display_value_name || userVal;
+          } else {
+            // Nếu là thuộc tính tùy chọn (như Petite, Cropped Top), BỎ QUA không gửi value_id: 0 để tránh lỗi "cannot be customized"
+            debugInfo.matchResults.push({
+              attrId,
+              origName,
+              dispName,
+              userVal,
+              skipped: "omitted_fixed_dropdown_without_value_id",
+            });
+            continue;
           }
         }
 
@@ -1265,6 +1349,50 @@ export default async function handler(req: any, res: any) {
                   }
                 }
               }
+            }
+
+            // Xử lý Boolean attributes (Petite, Cropped Top, Plus size...)
+            if (!matchedValueId) {
+              const isBooleanAttr = attrName.includes("petite") || attrName.includes("dáng người nhỏ") ||
+                                    attrName.includes("cropped") || attrName.includes("lửng") || attrName.includes("croptop") ||
+                                    attrName.includes("plus size") || attrName.includes("ngoại cỡ");
+
+              if (isBooleanAttr) {
+                const isNegative = ["không", "no", "false", "không có", "n/a", "none", "0"].includes(uValLower);
+                const isPositive = ["có", "yes", "true", "có sẵn", "1"].includes(uValLower);
+
+                if (isNegative) {
+                  const valMatch = existingValues.find((v: any) => {
+                    const o = (v.original_value_name || "").toLowerCase().trim();
+                    return o === "no" || o === "không" || o === "false" || o.includes("no") || o.includes("không");
+                  });
+                  if (valMatch) {
+                    matchedValueId = Number(valMatch.value_id || 0);
+                    finalValueName = valMatch.original_value_name;
+                  } else {
+                    if (attrName.includes("petite") || attrId === 100161) matchedValueId = 1446;
+                    if (attrName.includes("cropped") || attrId === 100150) matchedValueId = 1359;
+                  }
+                } else if (isPositive) {
+                  const valMatch = existingValues.find((v: any) => {
+                    const o = (v.original_value_name || "").toLowerCase().trim();
+                    return o === "yes" || o === "có" || o === "true" || o.includes("yes") || o.includes("có");
+                  });
+                  if (valMatch) {
+                    matchedValueId = Number(valMatch.value_id || 0);
+                    finalValueName = valMatch.original_value_name;
+                  } else {
+                    if (attrName.includes("petite") || attrId === 100161) matchedValueId = 1445;
+                    if (attrName.includes("cropped") || attrId === 100150) matchedValueId = 1358;
+                  }
+                }
+              }
+            }
+
+            // Nếu không tìm thấy value_id hợp lệ mà thuộc tính đã có sẵn giá trị cũ, giữ lại giá trị cũ
+            if (!matchedValueId && existingValues.length > 0) {
+              matchedValueId = Number(existingValues[0].value_id || 0);
+              finalValueName = existingValues[0].original_value_name || userVal;
             }
 
             mergedList.push({
