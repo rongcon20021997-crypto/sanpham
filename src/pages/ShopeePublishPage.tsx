@@ -14,6 +14,7 @@ import {
   publishProductToShopeeComplete,
   deleteShopeePublishedProduct,
   getShopeeSizeChartUrl,
+  fetchShopeeAppConfig,
   fetchShopeeLogisticsChannels,
   SHOPEE_STANDARD_FASHION_ATTRIBUTES,
   getDefaultFashionAttributes,
@@ -168,6 +169,7 @@ export function ShopeePublishPage({ onNavigateToSettings }: { onNavigateToSettin
           fetchShopeePresetCategories(),
           fetchShopeeDefaultLogisticsConfig(),
           fetchShopeePublishedProducts(),
+          fetchShopeeAppConfig(),
         ]);
 
         setProducts((pRes.data as Product[]) || []);
@@ -326,6 +328,9 @@ export function ShopeePublishPage({ onNavigateToSettings }: { onNavigateToSettin
     }
     setTargetImages(mediaImgs.slice(0, 9));
     setNewImageUrl("");
+
+    // Bảng quy đổi kích cỡ (Size Chart): Mặc định nạp ảnh từ Cài đặt
+    setTargetSizeChartUrl(getShopeeSizeChartUrl() || "");
 
     // Trọng lượng & đóng gói từ cấu hình vận chuyển
     const defaultWeightGram = Math.round(Number(logisticsConfig.defaultWeightKg || logisticsConfig.packageWeight || 0.2) * 1000);
@@ -1081,14 +1086,28 @@ export function ShopeePublishPage({ onNavigateToSettings }: { onNavigateToSettin
 
             {/* 3. Bảng quy đổi kích cỡ (Size Chart) Shopee */}
             <div className="p-4 rounded-2xl bg-slate-800/50 border border-slate-700/60 space-y-3">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
                 <h4 className="font-bold text-xs text-slate-200 flex items-center gap-2">
                   <Ruler size={15} className="text-amber-400" />
                   <span>3. Bảng quy đổi kích cỡ (Size Chart Shopee)</span>
                 </h4>
-                <span className="text-[11px] text-slate-400">
-                  {targetSizeChartUrl ? "Đang chọn ảnh bảng size riêng" : "Sử dụng ảnh mặc định trong Cài đặt"}
-                </span>
+                <div>
+                  {targetSizeChartUrl ? (
+                    targetSizeChartUrl === getShopeeSizeChartUrl() ? (
+                      <span className="text-[11px] font-medium text-emerald-400 bg-emerald-950/70 border border-emerald-800/60 px-2.5 py-0.5 rounded-full flex items-center gap-1">
+                        <CheckCircle2 size={12} /> Bảng size mặc định từ Cài đặt
+                      </span>
+                    ) : (
+                      <span className="text-[11px] font-medium text-amber-300 bg-amber-950/70 border border-amber-800/60 px-2.5 py-0.5 rounded-full flex items-center gap-1">
+                        <Sparkles size={12} /> Bảng size riêng cho sản phẩm này
+                      </span>
+                    )
+                  ) : (
+                    <span className="text-[11px] text-slate-400 bg-slate-800 border border-slate-700 px-2.5 py-0.5 rounded-full">
+                      Chưa chọn ảnh (Tự động vẽ bảng size cơ bản)
+                    </span>
+                  )}
+                </div>
               </div>
 
               {/* Ẩn file input size chart */}
@@ -1100,17 +1119,17 @@ export function ShopeePublishPage({ onNavigateToSettings }: { onNavigateToSettin
                 className="hidden"
               />
 
-              <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 bg-slate-900/80 p-3 rounded-xl border border-slate-700/60">
-                <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-xl bg-slate-950 border border-slate-700 overflow-hidden flex items-center justify-center relative group shrink-0">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 bg-slate-900/80 p-3.5 rounded-xl border border-slate-700/60">
+                <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-xl bg-slate-950 border border-slate-700 overflow-hidden flex items-center justify-center relative group shrink-0 shadow-inner">
                   {targetSizeChartUrl ? (
                     <>
                       <img src={targetSizeChartUrl} alt="Size Chart" className="w-full h-full object-contain p-1" />
-                      <div className="absolute inset-0 bg-slate-950/75 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1.5">
+                      <div className="absolute inset-0 bg-slate-950/80 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1.5">
                         <button
                           type="button"
                           onClick={() => window.open(targetSizeChartUrl, "_blank")}
                           className="p-1.5 rounded-lg bg-slate-800 text-slate-200 hover:text-white"
-                          title="Xem ảnh lớn"
+                          title="Xem ảnh phóng to"
                         >
                           <Eye size={14} />
                         </button>
@@ -1118,7 +1137,7 @@ export function ShopeePublishPage({ onNavigateToSettings }: { onNavigateToSettin
                           type="button"
                           onClick={() => setTargetSizeChartUrl("")}
                           className="p-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white"
-                          title="Xóa ảnh riêng (sử dụng ảnh mặc định cài đặt)"
+                          title="Bỏ dùng ảnh này (sẽ tự động vẽ bảng size)"
                         >
                           <Trash2 size={14} />
                         </button>
@@ -1127,14 +1146,14 @@ export function ShopeePublishPage({ onNavigateToSettings }: { onNavigateToSettin
                   ) : (
                     <div className="flex flex-col items-center justify-center p-2 text-center text-slate-500">
                       <Ruler size={24} className="opacity-40 mb-1 text-amber-400" />
-                      <span className="text-[9px]">Chưa chọn ảnh</span>
+                      <span className="text-[10px]">Chưa có ảnh</span>
                     </div>
                   )}
                 </div>
 
-                <div className="flex-1 space-y-2">
-                  <p className="text-xs text-slate-300">
-                    Ảnh Bảng quy đổi kích cỡ sẽ được tải trực tiếp lên Shopee Media Space để người mua xem chọn size chuẩn.
+                <div className="flex-1 space-y-2.5">
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    Ảnh Bảng quy đổi kích cỡ sẽ được tải trực tiếp lên Shopee Media Space để người mua xem chọn size chuẩn khi mua sản phẩm.
                   </p>
                   
                   <div className="flex flex-wrap items-center gap-2">
@@ -1145,14 +1164,14 @@ export function ShopeePublishPage({ onNavigateToSettings }: { onNavigateToSettin
                       className="px-3.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold flex items-center gap-1.5 shadow cursor-pointer disabled:opacity-50 transition-all"
                     >
                       {uploadingSizeChart ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
-                      <span>{uploadingSizeChart ? "Đang tải ảnh..." : targetSizeChartUrl ? "Thay đổi ảnh bảng size" : "Tải ảnh bảng size riêng"}</span>
+                      <span>{uploadingSizeChart ? "Đang tải ảnh..." : targetSizeChartUrl ? "Thay đổi ảnh bảng size" : "Tải ảnh bảng size"}</span>
                     </button>
 
-                    {targetSizeChartUrl && (
+                    {getShopeeSizeChartUrl() && targetSizeChartUrl !== getShopeeSizeChartUrl() && (
                       <button
                         type="button"
                         onClick={() => setTargetSizeChartUrl(getShopeeSizeChartUrl())}
-                        className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold border border-slate-700 flex items-center gap-1 cursor-pointer transition-colors"
+                        className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-emerald-400 text-xs font-semibold border border-emerald-800/50 flex items-center gap-1.5 cursor-pointer transition-colors"
                         title="Khôi phục ảnh bảng size mặc định trong Cài đặt"
                       >
                         <RotateCcw size={12} />
@@ -1161,7 +1180,7 @@ export function ShopeePublishPage({ onNavigateToSettings }: { onNavigateToSettin
                     )}
                   </div>
                   <p className="text-[11px] text-slate-400">
-                    💡 Bạn có thể tải lên 1 ảnh bảng size dùng chung cho tất cả sản phẩm trong <strong>Cài đặt &gt; Kết nối Shopee</strong> hoặc <strong>Cài đặt &gt; Size</strong>.
+                    💡 Ảnh bảng size cài đặt trong <strong>Cài đặt &gt; Kết nối Shopee</strong> sẽ được tự động áp dụng cho tất cả sản phẩm khi đăng sàn.
                   </p>
                 </div>
               </div>

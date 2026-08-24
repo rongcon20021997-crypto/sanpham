@@ -2077,7 +2077,14 @@ export async function publishProductToShopeeComplete(
 
   // Tải ảnh Bảng quy đổi kích cỡ chuẩn Shopee (Ưu tiên ảnh người dùng chọn hoặc ảnh đã cấu hình trong Cài đặt)
   let sizeChartImageId = "";
-  const sizeChartToUse = (input.sizeChartImage || getShopeeSizeChartUrl() || "").trim();
+  let sizeChartToUse = (input.sizeChartImage || getShopeeSizeChartUrl() || "").trim();
+  if (!sizeChartToUse) {
+    try {
+      const appConfig = await fetchShopeeAppConfig();
+      sizeChartToUse = (appConfig.sizeChartUrl || "").trim();
+    } catch {}
+  }
+
   if (sizeChartToUse) {
     try {
       const scRes = await uploadShopeeMediaImage(input.shopId, sizeChartToUse, "size_chart");
